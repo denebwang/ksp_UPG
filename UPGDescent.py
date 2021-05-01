@@ -12,7 +12,6 @@ ap = vessel.auto_pilot
 body = vessel.orbit.body
 body_frame = body.reference_frame
 flight = vessel.flight(body_frame)
-control = vessel.control
 r0 = body.equatorial_radius
 g0 = body.surface_gravity
 ge = 9.80665  # standard gravity which is used to calculate exhaust velocity
@@ -41,13 +40,13 @@ line.color = (1,0,0)
 line.thickness = 2'''
 target_v = np.array([-v, 0., 0.])
 v_f = np.asarray(space_center.transform_velocity((0., 0., 0.), target_v, target_frame, body_frame)).reshape(-1, 1)
+t_1 = 10
 
 # normalize to dimensionless
 r_f = r_f / r0
 v_f = v_f / np.sqrt(r0 * g0)
 
-
-def mass_t(t, isp, m0, thrust):
+def mass_t(t, t0, isp, m0, thrust):
     """
     calculate the expected mass at dimensionless time t
     :param t: dimensionless time
@@ -56,7 +55,7 @@ def mass_t(t, isp, m0, thrust):
     :param thrust: engine thrust
     :return: mass at t
     """
-    return m0 - t * np.sqrt(r0 / g0) * thrust / (isp * ge)
+    return m0 - (t - t0) * np.sqrt(r0 / g0) * thrust / (isp * ge)
 
 
 def transfer_mat(t, t0):
@@ -107,7 +106,7 @@ def thrust_integral(type_name, t, t0, pv0, pr0, thrust, isp, m0):
     def i(t):
         pv = lambda_t(t, t0, pv0, pr0)[0:3, :]
         pv = pv / np.linalg.norm(pv)
-        temp = pv * thrust / (mass_t(t, isp, m0, thrust) * g0)
+        temp = pv * thrust / (mass_t(t, t0, isp, m0, thrust) * g0)
         if type_name == 'c':
             return temp * np.cos(t - t0)
         elif type_name == 's':
@@ -120,21 +119,26 @@ def thrust_integral(type_name, t, t0, pv0, pr0, thrust, isp, m0):
                                7 * i(t0 + 4 * delta))
 
 
-# get some useful values
+# get initial values
 specific_impulse = vessel.vacuum_specific_impulse
-max_thrust = vessel.max_thrust
+max_thrust = conn.add_stream(getattr, vessel, 'max_thrust')
 mass = conn.add_stream(getattr, vessel, 'mass')
+ut = conn.add_stream(getattr, space_center, 'ut')
 velocity = conn.add_stream(vessel.velocity, body_frame)
 position = conn.add_stream(vessel.position, body_frame)
+thrust = max_thrust()
 m0 = mass()
 v_0 = np.asarray(velocity()).reshape(-1, 1) / np.sqrt(r0 * g0)
 r_0 = np.asarray(position()).reshape(-1, 1) / r0
+t_0 = ut()
+t_1 = (t_0 + t_1) / np.sqrt(r0 / g0)
+t_0 = t_0 / np.sqrt(r0 / g0)
 
 # initial guess
 
 pv = np.asarray(-v_0 / np.linalg.norm(v_0)).reshape(-1, 1)
 pr = np.zeros((3, 1))
-tf = np.array([300. / np.sqrt(r0 / g0)]).reshape(1, 1)
+tf = np.array([(ut() + 300.) / np.sqrt(r0 / g0)]).reshape(1, 1)
 x = np.vstack((r_0, v_0))
 
 z0 = np.hstack((pv.T, pr.T, tf)).T
@@ -145,7 +149,7 @@ def fun(z):
     pr = z[3:6].reshape(-1, 1)
     tf = z[6]
     # final position constraint
-    x_f = x_t(x, tf, 0, pv, pr, max_thrust, specific_impulse, m0)
+    x_f = x_t(x, tf, t_0, pv, pr, thrust, specific_impulse, m0)
     r_tf = x_f[0:3, :]
     s1 = r_tf.T @ r_tf - r_f.T @ r_f
     # final velocity constraint
@@ -156,12 +160,18 @@ def fun(z):
     pvf = lambdat[0:3, :]
     prf = lambdat[3:6, :]
     s3 = prf.T @ v_tf - pvf.T @ r_tf + \
-         np.linalg.norm(pvf) * max_thrust / (mass_t(tf, specific_impulse, m0, max_thrust) * g0) - 1
+         np.linalg.norm(pvf) * thrust / (mass_t(tf, t_0, specific_impulse, m0, thrust) * g0) - 1
     s4 = r_tf[2, 0] * prf[0, 0] - r_tf[0, 0] * prf[2, 0]
     s5 = r_tf[2, 0] * prf[1, 0] - r_tf[1, 0] * prf[2, 0]
     return [s1[0, 0], s2[0, 0], s2[1, 0], s2[2, 0], s3[0, 0], s4, s5]
 
 
+"""def fun_2(t2):
+    sol = optimize.root(fun, z0, method='lm', jac=False)
+    z = sol.x.reshape(-1, 1)
+    z0 = z
+    return
+"""
 ap.reference_frame = body_frame
 ap.engage()
 
@@ -172,14 +182,14 @@ while True:
     pv = z[0:3, :]
     pr = z[3:6, :]
     tf = z[6, 0]
-    tgo =tf * np.sqrt(r0 / g0)
-    distance = np.linalg.norm((r_0 - r_f) * r0)
+    tgo = (tf - t_0) * np.sqrt(r0 / g0)
+    #distance = np.linalg.norm((r_0 - r_f) * r0)
     print("tgo:" + str(tgo))
     #print("distance:" + str(distance))
     unit_t = pv / np.linalg.norm(pv)
     ap.target_direction = tuple(unit_t.reshape(1, -1)[0])
     if tgo < 0.5 and flight.surface_altitude < 2000:
-        control.throttle = 0
+        print("UPG disengaged")
         break
     time.sleep(0.5)
     # get new values for next loop
@@ -187,4 +197,9 @@ while True:
     r_0 = np.asarray(position()).reshape(-1, 1) / r0
     x = np.vstack((r_0, v_0))
     m0 = mass()
-ap.disengage()
+    thrust = max_thrust()
+    t_0 = ut() / np.sqrt(r0 / g0)
+
+vessel.control.throttle = 0.
+while True:
+    ap.target_direction = -1 * velocity()
