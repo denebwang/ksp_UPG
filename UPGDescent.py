@@ -274,10 +274,10 @@ while True:
         vessel.control.throttle = 0.00001
     else:
         vessel.control.throttle = 1
-    if tgo < 0.5 and flight.surface_altitude < 2000:  # TODO: disengage criterion not robust
+    if tgo < 2. and flight.surface_altitude < 2000:  # TODO: disengage criterion not robust
         print("UPG disengaged")
         break
-    time.sleep(0.5)
+    time.sleep(0.3)
     # get new values for next loop
     v_0 = np.asarray(velocity()).reshape(-1, 1) / velocity_multiplier
     r_0 = np.asarray(position()).reshape(-1, 1) / position_multiplier
