@@ -32,7 +32,7 @@ min_throttle = params['min_throttle']
 print(min_throttle)
 # target vector
 r_f = np.asarray(body.position_at_altitude(lat, lon,
-                                           body.surface_height(lat, lon) + 100, body_frame)).reshape(-1, 1)
+                                           body.surface_height(lat, lon) + 150, body_frame)).reshape(-1, 1)
 
 temp1 = space_center.ReferenceFrame.create_relative(body_frame,
                                                     rotation=(0., np.sin(-lon / 2. * np.pi / 180), 0.,
@@ -48,7 +48,7 @@ line.color = (1,0,0)
 line.thickness = 2'''
 target_v = np.array([-v, 0., 0.])
 v_f = np.asarray(space_center.transform_velocity((0., 0., 0.), target_v, target_frame, body_frame)).reshape(-1, 1)
-t_1 = 10
+t_1 = 10.
 
 # normalize to dimensionless
 r_f = r_f / position_multiplier
@@ -99,7 +99,8 @@ def x_t(x0, t, t0, t1, t2, pv0, pr0, thrust, min_t, isp, m0):
         return np.vstack((i_c, i_s))
 
     if t1 > t2:
-        raise Exception("t1>t2, t1="+str(t1)+" t2="+str(t2))
+        print("warning: t1>t2, t1="+str(t1)+" t2="+str(t2))
+        t2 = t1
     if t0 < t1:
         # x at t1
         i_t1 = I(t1, t0, pv0, pr0, thrust, isp, m0)
@@ -172,13 +173,12 @@ v_0 = np.asarray(velocity()).reshape(-1, 1) / velocity_multiplier
 r_0 = np.asarray(position()).reshape(-1, 1) / position_multiplier
 t_0 = ut() / time_multiplier
 t_1 = t_0 + t_1 / time_multiplier
-t_2 = t_0 + 30 / time_multiplier
 
 # initial guess
 
 pv = np.asarray(-v_0 / np.linalg.norm(v_0)).reshape(-1, 1)
 pr = np.zeros((3, 1))
-tf = np.array([(ut() + 300.) / time_multiplier]).reshape(1, 1)
+tf = np.array([(ut() + 350.) / time_multiplier]).reshape(1, 1)
 x = np.vstack((r_0, v_0))
 
 z0 = np.hstack((pv.T, pr.T, tf)).T
@@ -206,7 +206,7 @@ def fun(z, x_0, t_0, t_1, t_2, thrust, min_t, isp, m0 ):
 
 
 def fun_2(t2, z0, x_0, t_0, t_1, thrust, min_t, isp, m0):
-    sol = optimize.root(fun, z0, args=(x_0, t_0, t_1, t2, thrust, min_throttle, isp, m0), method='lm', jac=False)
+    sol = optimize.root(fun, z0, args=(x_0, t_0, t_1, t2, thrust, min_t, isp, m0), method='lm', jac=False)
     z = sol.x.reshape(-1, 1)
     tf = z[6, 0]
     m_t1 = mass_t(t_1, t_0, isp, m0, thrust)
@@ -214,9 +214,16 @@ def fun_2(t2, z0, x_0, t_0, t_1, thrust, min_t, isp, m0):
     m_tf = mass_t(tf, t2, isp, m_t2, thrust)
     return m0-m_tf
 
-"""print("t2")
-t_2 = optimize.brent(fun_2, args=(z0, x, t_0, t_1, thrust, min_throttle, specific_impulse, m0), brack=(t_1, tf[0,0]))"""
-
+print("evaluating t2")
+result = optimize.minimize_scalar(fun_2, bounds=(t_1, tf[0, 0]),
+                               args=(z0, x, t_0, t_1, thrust, min_throttle, specific_impulse, m0), method='Bounded')
+t_2 = result.x
+# check if t2 smaller than t1
+if t_2 < t_1:
+    t_2 = t_1
+# convert to time interval
+t2 = t_2 - t_0
+print("optimal t2:"+str(t_2*time_multiplier))
 ap.reference_frame = body_frame
 ap.engage()
 
@@ -238,7 +245,7 @@ m0 = mass()
 thrust = max_thrust()
 t_0 = ut() / time_multiplier
 t_1 = t_0 + 10 / time_multiplier
-t_2 = t_0 + 30 / time_multiplier
+t_2 = t_0 + t2
 
 vessel.control.throttle = 1
 while True:
