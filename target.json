@@ -2,5 +2,5 @@
   "lon": -4,
   "lat": 0,
   "vf": 0,
-  "min_throttle": 0.2
+  "min_throttle": 0.01
 }
