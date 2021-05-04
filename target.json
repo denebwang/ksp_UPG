@@ -1,9 +1,9 @@
 {
-  "lon": 1.0,
+  "lon": 15.0,
   "lat": 0.0,
   "vf": 5.0,
   "t1": 15.0,
   "min_throttle": 0.01,
   "rated_burn_time": 350.0,
-  "Bolza_k": 250.0
+  "Bolza_k": 1000.0
 }

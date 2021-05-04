@@ -69,7 +69,7 @@ class UPG(object):
         """
         lambda_0 = np.vstack((pv0, -pr0))
         temp = self.transfer_mat(t, t0) @ lambda_0
-        return temp[0:3, :], temp[3:6, :]
+        return temp[0:3, :], -temp[3:6, :]
 
     def x_t(self, x0, t, t0, t1, t2, pv0, pr0, thrust, min_t, isp, m0):
         """

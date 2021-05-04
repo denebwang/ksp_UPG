@@ -25,6 +25,7 @@ lon = params['lon']
 lat = params['lat']
 v = params['vf']
 min_throttle = params['min_throttle']
+min_thrust = 0.
 k = params['Bolza_k']
 t1 = params['t1']
 rated_burn_time = params['rated_burn_time']
@@ -88,7 +89,7 @@ while True:
     t_1 = t_0 + t1
     t_2 = t_0 + t2
     sol = optimize.root(upg.target_function_sl, z0,
-                        args=(r_f, v_f, x, t_0, t_1, t_2, thrust, min_throttle, specific_impulse, m0),
+                        args=(r_f, v_f, x, t_0, t_1, t_2, thrust, min_thrust, specific_impulse, m0),
                         method='lm', jac=False)
     z = sol.x.reshape(-1, 1)
     z0 = z
@@ -102,7 +103,7 @@ while True:
     r_guidance = np.linalg.norm(r_0 - r_f_t) * upg.position_multiplier
     r_togo = np.linalg.norm(r_0 - r_f) * upg.position_multiplier
     print("guidance distance: {0:.2f}m, target distance: {1:.2f}m".format(r_guidance, r_togo))
-    if r_guidance > r_togo + 1500.:
+    if r_guidance > r_togo + 1000.:
         print("PDI")
         break
     time.sleep(1)
@@ -118,7 +119,7 @@ while True:
     r_0 = x[0:3, :]
     sol = optimize.root(
         upg.target_function_bl, z0,
-        args=(k, r_f, v_f, x, t_0, t_1, t_2, thrust, min_throttle, specific_impulse, m0), jac=False)
+        args=(k, r_f, v_f, x, t_0, t_1, t_2, thrust, min_thrust, specific_impulse, m0), jac=False)
     z = sol.x.reshape(-1, 1)
     z0 = z
     pv = z[0:3, :]
@@ -146,7 +147,7 @@ while True:
         r_f = np.asarray(body.position_at_altitude(
             lat, lon, body.surface_height(lat, lon) + 300, body_frame)).reshape(-1, 1) / upg.position_multiplier
     if t_1 < t_0 < t_2:
-        vessel.control.throttle = 0.00001
+        vessel.control.throttle = min_thrust
     else:
         vessel.control.throttle = 1
     if tgo < 20.:
@@ -156,8 +157,8 @@ while True:
 
 # ADGP terminal guidance
 # change r_f to ground, cancel downrange to ensure a safe land
-r_f_ori = np.asarray(body.position_at_altitude(lat, lon,
-                                           body.surface_height(lat, lon), body_frame)).reshape(-1, 1)
+r_f_ori = np.asarray(body.position_at_altitude(
+    lat, lon, body.surface_height(lat, lon), body_frame)).reshape(-1, 1)
 x_f = upg.x_f
 r_f_t = tuple(upg.position_multiplier * x_f[0:3, :].flatten())
 lat = body.latitude_at_position(r_f_t, body_frame)
