@@ -24,19 +24,21 @@ lon = params['lon']
 lat = params['lat']
 v = params['vf']
 min_throttle = params['min_throttle']
+k = params['Bolza_k']
+t1 = params['t1']
 # target vector
 r_f = np.asarray(body.position_at_altitude(lat, lon,
-                                           body.surface_height(lat, lon) + 250, body_frame)).reshape(-1, 1)
+                                           body.surface_height(lat, lon) + 300, body_frame)).reshape(-1, 1)
 # get final velocity in body frame
-
 target_frame = target_reference_frame(space_center, body, lat, lon)
 target_v = np.array([-v, 0., 0.])
 v_f = np.asarray(space_center.transform_velocity((0., 0., 0.), target_v, target_frame, body_frame)).reshape(-1, 1)
-t1 = 15.
+
 
 # normalize to dimensionless
 r_f = r_f / upg.position_multiplier
 v_f = v_f / upg.velocity_multiplier
+t1 = t1 / upg.time_multiplier
 
 # create data streams
 vacuum_specific_impulse = conn.add_stream(getattr, vessel, 'vacuum_specific_impulse')
@@ -45,7 +47,6 @@ current_thrust = conn.add_stream(getattr, vessel, 'thrust')
 mass = conn.add_stream(getattr, vessel, 'mass')
 ut = conn.add_stream(getattr, space_center, 'ut')
 height = conn.add_stream(getattr, flight, 'surface_altitude')
-speed = conn.add_stream(getattr, flight, 'speed')
 velocity = conn.add_stream(vessel.velocity, body_frame)
 position = conn.add_stream(vessel.position, body_frame)
 
@@ -57,7 +58,7 @@ v_0 = np.asarray(velocity()).reshape(-1, 1) / upg.velocity_multiplier
 r_0 = np.asarray(position()).reshape(-1, 1) / upg.position_multiplier
 x = np.vstack((r_0, v_0))
 t_0 = ut() / upg.time_multiplier
-t_1 = t_0 + t1 / upg.time_multiplier
+t_1 = t_0 + t1
 
 # initial guess
 pv = np.asarray(-v_0 / np.linalg.norm(v_0)).reshape(-1, 1)
@@ -73,31 +74,49 @@ t_2 = optimize.minimize_scalar(
 t2 = t_2 - t_0
 print("optimal t2: {:.2f}".format(t2 * upg.time_multiplier))
 
-# run once
+# PDI determination
 print("initiating UPG")
-sol = optimize.root(upg.target_function_sl, z0,
-                    args=(r_f, v_f, x, t_0, t_1, t_2, thrust, min_throttle, specific_impulse, m0),
-                    method='lm', jac=False)
-z = sol.x.reshape(-1, 1)
-z0 = z
-pv = z[0:3, :]
-unit_t = pv / np.linalg.norm(pv)
-
+print("waiting for powered descent initial")
 ap.reference_frame = body_frame
 ap.engage()
-ap.target_direction = tuple(unit_t.flatten())
-print("pointing to correct direction")
-ap.wait()
+while True:
+    time.sleep(1)
+    sol = optimize.root(upg.target_function_sl, z0,
+                        args=(r_f, v_f, x, t_0, t_1, t_2, thrust, min_throttle, specific_impulse, m0),
+                        method='lm', jac=False)
+    z = sol.x.reshape(-1, 1)
+    z0 = z
+    pv = z[0:3, :]
+    unit_t = pv / np.linalg.norm(pv)
+    ap.target_direction = tuple(unit_t.flatten())
+    x, m0, thrust, t_0 = upg.update(velocity, position, mass, max_thrust, ut)
+    t_1 = t_0 + t1
+    t_2 = t_0 + t2
+    # check the PDI condition
+    x_f = upg.x_f
+    r_f_t = x_f[0:3, :]
+    r_0 = x[0:3, :]
+    r_guidance = np.linalg.norm(r_0 - r_f_t) * upg.position_multiplier
+    r_togo = np.linalg.norm(r_0 - r_f) * upg.position_multiplier
+    print("guidance distance: {0:.2f}m, target distance: {1:.2f}m".format(r_guidance, r_togo))
+    if r_guidance > r_togo:
+        print("PDI")
+        break
 
-x, m0, thrust, t_0 = upg.update(velocity, position, mass, max_thrust, ut)
-t_1 = t_0 + t1 / upg.time_multiplier
-t_2 = t_0 + t2
+'''print("re-evaluating t2...")
+t_2 = optimize.minimize_scalar(
+    upg.target_function_t2_pl, bounds=(t_1, tf[0, 0]), bracket=(t_1, t_2, tf[0, 0]),
+    args=(z0, r_f, v_f, x, t_0, t_1, thrust, min_throttle, specific_impulse, m0), method='Bounded').x
+# convert to time interval
+t2 = t_2 - t_0
+print("optimal t2: {:.2f}".format(t2 * upg.time_multiplier))'''
 
+# UPG Guidance
 vessel.control.throttle = 1
 while True:
     sol = optimize.root(
-        upg.target_function_sl, z0,
-        args=(r_f, v_f, x, t_0, t_1, t_2, thrust, min_throttle, specific_impulse, m0), method='lm', jac=False)
+        upg.target_function_bl, z0,
+        args=(2000., r_f, v_f, x, t_0, t_1, t_2, thrust, min_throttle, specific_impulse, m0), jac=False)
     z = sol.x.reshape(-1, 1)
     z0 = z
     pv = z[0:3, :]
@@ -120,31 +139,29 @@ while True:
         vessel.control.throttle = 0.00001
     else:
         vessel.control.throttle = 1
-    if tgo < 10. and flight.surface_altitude < 2000:
+    if tgo < 15. and flight.surface_altitude < 2000:
         print("UPG disengaged")
         break
     time.sleep(0.2)
 
-    # correct target to the correct height
-    x_f = upg.x_f
-    r_f_t = tuple(upg.position_multiplier * x_f[0:3, :].flatten())
-    lat = body.latitude_at_position(r_f_t, body_frame)
-    lon = body.longitude_at_position(r_f_t, body_frame)
-    r_f = np.asarray(body.position_at_altitude(
-        lat, lon, body.surface_height(lat, lon) + 300, body_frame)).reshape(-1, 1) / upg.position_multiplier
-
     # get new values for next loop
     x, m0, thrust, t_0 = upg.update(velocity, position, mass, max_thrust, ut)
-    r_0 = x[0:3]
+    r_0 = x[0:3, :]
+
 # ADGP
 # change r_f to ground
+# correct target to the correct height
+x_f = upg.x_f
+r_f_t = tuple(upg.position_multiplier * x_f[0:3, :].flatten())
+lat = body.latitude_at_position(r_f_t, body_frame)
+lon = body.longitude_at_position(r_f_t, body_frame)
 r_f = np.asarray(body.position_at_altitude(
     lat, lon, body.surface_height(lat, lon) + 10, body_frame)).reshape(-1, 1)
 
 a_f = np.zeros((3, 1))
 v_f = np.zeros((3, 1))
 # calculate tgo
-sin_gamma = flight.vertical_speed / speed()
+sin_gamma = flight.vertical_speed / flight.speed
 
 
 def fun_at(at, v0, s_gamma, h0, g0):
@@ -152,7 +169,7 @@ def fun_at(at, v0, s_gamma, h0, g0):
            (v0 ** 2 * g0 * (1 + s_gamma ** 2) / (4 * h0)) - g0 ** 2
 
 
-V_0 = speed()
+V_0 = flight.speed
 h_0 = height()
 a_t = optimize.root_scalar(fun_at, args=(V_0, sin_gamma, h_0, upg.g0),
                            method='brentq', bracket=(0, thrust / m0)).root
@@ -181,7 +198,7 @@ while True:
     vessel.control.throttle = throttle
     unit_t = a_t / a
     ap.target_direction = tuple(unit_t.flatten())
-    if tgo < 0.5 or r_go < 2 or height() < 2 or speed() < 0.:
+    if tgo < 0.5 or r_go < 5 or height() < 5:
         print("ADGP disengaged")
         vessel.control.throttle = 0.
         break
@@ -193,3 +210,4 @@ while True:
 ap.disengage()
 vessel.control.rcs = False
 print("Landing precision: {:.2f}m".format(r_go))
+
