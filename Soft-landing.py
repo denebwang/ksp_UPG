@@ -129,8 +129,6 @@ ap.target_direction = tuple(unit_t.reshape(1, -1)[0])
 print("pointing to correct direction")
 ap.wait()
 
-
-
 v_0 = np.asarray(velocity()).reshape(-1, 1) / upg.velocity_multiplier
 r_0 = np.asarray(position()).reshape(-1, 1) / upg.position_multiplier
 x = np.vstack((r_0, v_0))
@@ -208,7 +206,7 @@ V_0 = flight.speed
 h_0 = height()
 a_t = optimize.root_scalar(fun_at, args=(V_0, sin_gamma, h_0, upg.g0),
                            method='brentq', bracket=(0, thrust / m0)).root
-t_f = 1.3 * (V_0 / 2) * (((1 + sin_gamma) / (a_t + upg.g0)) + ((1 - sin_gamma) / (a_t - upg.g0)))
+t_f = 1.2 * (V_0 / 2) * (((1 + sin_gamma) / (a_t + upg.g0)) + ((1 - sin_gamma) / (a_t - upg.g0)))
 print('tgo:' + str(t_f))
 t_f = t_f + ut()
 print("Terminal guidance engaged")
@@ -234,14 +232,16 @@ while True:
     vessel.control.throttle = throttle
     unit_t = a_t / a
     ap.target_direction = tuple(unit_t.flatten())
-    if tgo < 0.5 or r_go < 5 or height() < 5:
+    if tgo < 0.5 or r_go < 5 or height() < 6:
         print("ADGP disengaged")
         break
 while True:
-    if vessel.situation == space_center.VesselSituation.landed:
+    if vessel.situation == space_center.VesselSituation.landed \
+            or vessel.situation == space_center.VesselSituation.splashed:
+        print("landed!")
         break
 ap.disengage()
 vessel.control.throttle = 0.
 vessel.control.rcs = False
-print("Landing pricision: {:.2f}m".format(distance))
+print("Landing precision: {:.2f}m".format(distance))
 
