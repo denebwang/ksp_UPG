@@ -99,6 +99,7 @@ class UPG(object):
             pv_t, pr_t = self.lambda_t(t, t0, pv0, pr0)
             m_t = self.mass_t(t, t0, isp, m0, thrust)
             return x_temp, pv_t, pr_t, m_t
+
         if t1 > t2:
             print("warning: t1>t2, t1=" + str(t1) + " t2=" + str(t2))
             t2 = t1
@@ -106,15 +107,15 @@ class UPG(object):
             # at t1
             x_t, pv_t, pr_t, m_t = transfer(t1, t0, x0, pv0, pr0, thrust, isp, m0)
             # at t2
-            x_t, pv_t, pr_t, m_t = transfer(t2, t1, x_t, pv_t, pr_t, thrust * min_t, isp, m0)
+            x_t, pv_t, pr_t, m_t = transfer(t2, t1, x_t, pv_t, pr_t, thrust * min_t, isp, m_t)
             # at t
-            x_t, _, _, self.m_f = transfer(t, t1, x_t, pv_t, pr_t, thrust, isp, m0)
+            x_t, _, _, self.m_f = transfer(t, t2, x_t, pv_t, pr_t, thrust, isp, m_t)
         elif t0 >= t1:
             if t0 < t2:
                 # at t2
                 x_t, pv_t, pr_t, m_t = transfer(t2, t0, x0, pv0, pr0, thrust * min_t, isp, m0)
                 # at t
-                x_t, _, _, self.m_f = transfer(t, t2, x_t, pv_t, pr_t, thrust, isp, m0)
+                x_t, _, _, self.m_f = transfer(t, t2, x_t, pv_t, pr_t, thrust, isp, m_t)
             elif t0 >= t2:
                 x_t, _, _, self.m_f = transfer(t, t0, x0, pv0, pr0, thrust, isp, m0)
         return x_t
@@ -198,11 +199,12 @@ class UPG(object):
 
         s3 = prf.T @ v_tf - pvf.T @ r_tf + \
              np.linalg.norm(pvf) * thrust / (self.m_f * self.g0) - 1
-        s4 = r_tf[2, 0] * prf[0, 0] - r_tf[0, 0] * prf[2, 0] + k * (r_tf[0, 0] * r_f[2, 0] + r_tf[2, 0] * r_f[0, 0])
-        s5 = r_tf[2, 0] * prf[1, 0] - r_tf[1, 0] * prf[2, 0] + k * (r_tf[1, 0] * r_f[2, 0] + r_tf[2, 0] * r_f[1, 0])
+        s4 = r_tf[2, 0] * prf[0, 0] - r_tf[0, 0] * prf[2, 0] + k * (r_tf[0, 0] * r_f[2, 0] - r_tf[2, 0] * r_f[0, 0])
+        s5 = r_tf[2, 0] * prf[1, 0] - r_tf[1, 0] * prf[2, 0] + k * (r_tf[1, 0] * r_f[2, 0] - r_tf[2, 0] * r_f[1, 0])
         return [s1[0, 0], s2[0, 0], s2[1, 0], s2[2, 0], s3[0, 0], s4, s5]
 
     def target_function_pl(self, z, r_f, v_f, x_0, t_0, t_1, t_2, thrust, min_t, isp, m0):
+        # pinpoint landing is not robust. don't use it
         pv = z[0:3].reshape(-1, 1)
         pr = z[3:6].reshape(-1, 1)
         tf = z[6]
@@ -229,13 +231,6 @@ class UPG(object):
         m_t1 = self.mass_t(t_1, t_0, isp, m0, thrust)
         m_t2 = self.mass_t(t2, t_1, isp, m_t1, thrust * min_t)
         m_tf = self.mass_t(tf, t2, isp, m_t2, thrust)'''
-        return m0 - self.m_f
-
-    def target_function_t2_pl(self, t2, z0, r_f, v_f, x_0, t_0, t_1, thrust, min_t, isp, m0):
-        # m_f is calculated during root finding
-        root(
-            self.target_function_pl, z0, args=(r_f, v_f, x_0, t_0, t_1, t2, thrust, min_t, isp, m0),
-            method='lm', jac=False)
         return m0 - self.m_f
 
     def v_go(self, isp, m0):
