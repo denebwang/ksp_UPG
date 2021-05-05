@@ -20,3 +20,16 @@ def target_reference_frame(space_center, body,  latitude: int, longitude: int):
                                                                   np.cos(latitude / 2. * np.pi / 180)))
     height = body.surface_height(latitude, longitude) + body.equatorial_radius
     return space_center.ReferenceFrame.create_relative(temp2, position=(height, 0., 0.))
+
+
+def thrust2throttle(thrust, max_thrust, min_throttle):
+    return (thrust - max_thrust * min_throttle) / (thrust * (1. - min_throttle))
+
+
+def move_position2height(height, position, body, frame):
+    position = tuple(position.flatten())
+    lat = body.latitude_at_position(position, frame)
+    lon = body.longitude_at_position(position, frame)
+    return np.asarray(body.position_at_altitude(
+        lat, lon, body.surface_height(lat, lon) + height, frame)
+    ).reshape(-1, 1)
