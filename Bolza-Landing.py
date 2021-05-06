@@ -4,7 +4,8 @@ import json
 import numpy as np
 from scipy import optimize
 import UPG
-from Utilities import target_reference_frame, thrust2throttle, move_position2height
+from Utilities import \
+    target_reference_frame, thrust2throttle, move_position2height
 import Apollo
 
 conn = krpc.connect()
@@ -15,8 +16,6 @@ ap = vessel.auto_pilot
 body = vessel.orbit.body
 body_frame = body.reference_frame
 flight = vessel.flight(body_frame)
-
-
 
 # load params
 with open("target.json") as f:
@@ -36,12 +35,20 @@ r_f = np.asarray(body.position_at_altitude(
 
 # get final velocity and up vector in body frame
 target_frame = target_reference_frame(space_center, body, lat, lon)
-v_f = np.asarray(space_center.transform_velocity((0., 0., 0.), (-v, 0., 0.), target_frame, body_frame)).reshape(-1, 1)
-up = np.asarray(space_center.transform_velocity((0., 0., 0.), (1, 0, 0), target_frame, body_frame)).reshape(-1, 1)
+
+v_f = np.asarray(space_center.transform_velocity(
+    (0., 0., 0.), (-v, 0., 0.), target_frame, body_frame)).reshape(-1, 1)
+up = np.asarray(space_center.transform_velocity(
+    (0., 0., 0.), (1, 0, 0), target_frame, body_frame)).reshape(-1, 1)
 up /= np.linalg.norm(up)
 
+# draw the target
+line = conn.drawing.add_line((0., 0., 0.), (20., 0., 0.), target_frame)
+line.thickness = 3
+
 # create data streams
-vacuum_specific_impulse = conn.add_stream(getattr, vessel, 'vacuum_specific_impulse')
+vacuum_specific_impulse = conn.add_stream(getattr, vessel,
+                                          'vacuum_specific_impulse')
 max_thrust = conn.add_stream(getattr, vessel, 'max_thrust')
 current_thrust = conn.add_stream(getattr, vessel, 'thrust')
 mass = conn.add_stream(getattr, vessel, 'mass')
@@ -54,7 +61,6 @@ position = conn.add_stream(vessel.position, body_frame)
 # get initial values
 thrust = max_thrust()
 specific_impulse = vacuum_specific_impulse()
-m0 = mass()
 v_0 = np.asarray(velocity()).reshape(-1, 1)
 r_0 = np.asarray(position()).reshape(-1, 1)
 t_0 = ut()
@@ -65,8 +71,10 @@ pr = np.zeros((3, 1))
 tf = np.array([rated_burn_time]).reshape(1, 1)
 
 print("initiating UPG")
-upg = UPG.UPG(body, k=k, r_f=r_f, v_f=v_f, r_t=r_0, v_t=v_0, mass=mass(), max_thrust=thrust, min_throttle=0.,
-              specific_impulse=specific_impulse, t_0=t_0, t_1=t1, pv0=pv, pr0=pr, t_f=tf)
+upg = UPG.UPG(body, k=k, r_f=r_f, v_f=v_f, r_t=r_0, v_t=v_0, mass=mass(),
+              max_thrust=thrust, min_throttle=0.,
+              specific_impulse=specific_impulse, t_0=t_0, t_1=t1,
+              pv0=pv, pr0=pr, t_f=tf)
 
 print("evaluating t2...")
 upg.solve_t_2()
@@ -80,18 +88,21 @@ guidance_interval = 1
 while True:
     v_0 = np.asarray(velocity()).reshape(-1, 1)
     r_0 = np.asarray(position()).reshape(-1, 1)
-    upg.update(r_t=r_0, v_t=v_0, mass=mass(), max_thrust=max_thrust(), t_0=ut())
+    upg.update(r_t=r_0, v_t=v_0, mass=mass(),
+               max_thrust=max_thrust(), t_0=ut())
     if upg.status == UPG.Status.PDI:
         upg.update_time()
         upg.solve(mode='soft')
         r_tf = upg.r_tf
         r_guidance = np.linalg.norm(r_0 - r_tf)
         r_togo = np.linalg.norm(r_0 - r_f)
-        print("guidance distance: {0:.2f}m, target distance: {1:.2f}m".format(r_guidance, r_togo))
+        print("guidance distance: {0:.2f}m, target distance: {1:.2f}m"
+              .format(r_guidance, r_togo))
         if r_guidance > r_togo + 1000.:
             print("PDI, UPG engaged")
             vessel.control.throttle = 1
             guidance_interval = 0.2
+            upg.status = UPG.Status.Powered_descent
             continue
         print("{:.2f}m togo".format(r_togo + 1000. - r_guidance))
     elif upg.status == UPG.Status.Powered_descent:
@@ -100,7 +111,7 @@ while True:
         t_1_go = upg.t_1_go
         t_2_go = upg.t_2_go
         distance = np.linalg.norm(r_0 - r_f)
-        v_go = upg.v_go(specific_impulse, m0)
+        v_go = upg.v_go
         print("\ntgo: {:.2f}".format(tgo), end=" ")
         if t_1_go > 0:
             print("t1go: {:.2f}".format(t_1_go), end=" ")
@@ -129,16 +140,16 @@ print("Switching to Apollo terminal guidance...")
 r_f_ori = np.asarray(body.position_at_altitude(
     lat, lon, body.surface_height(lat, lon), body_frame)).reshape(-1, 1)
 
-r_f = move_position2height(300., upg.r_tf, body, body_frame)
+r_f = move_position2height(0, upg.r_tf, body, body_frame)
 
-a_f = upg.g0 * up
+a_f = 0 * up
 v_f = -1 * up
 # calculate tgo
 sin_gamma = flight.vertical_speed / speed()
 V_0 = speed()
 h_0 = height()
 a_t = optimize.root_scalar(Apollo.fun_at, args=(V_0, sin_gamma, h_0, upg.g0),
-                           method='brentq', bracket=(0, thrust / m0)).root
+                           method='brentq', bracket=(0, thrust / mass())).root
 t_f = Apollo.t_togo(V_0, sin_gamma, a_t, upg.g0)
 print('tgo: {:.2f}'.format(t_f))
 t_f = t_f + ut()
@@ -153,7 +164,8 @@ while True:
     print("\nt_go: {:.2f}".format(apdg.t_go))
     r_go = np.linalg.norm(r_f - r_0)
     print("distance to land: {:.2f}".format(r_go))
-    vessel.control.throttle = thrust2throttle(apdg.thrust, max_thrust(), min_throttle)
+    vessel.control.throttle = thrust2throttle(
+        apdg.thrust, max_thrust(), min_throttle)
     ap.target_direction = tuple(apdg.thrust_direction.flatten())
     if apdg.t_go < 0.5 or r_go < 2 or height() < 2 or speed() < 0.:
         print("APDG disengaged")

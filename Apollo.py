@@ -7,7 +7,8 @@ def fun_at(at, v0, sin_gamma, h0, g0):
 
 
 def t_togo(v0, sin_gamma, at, g0):
-    return 1.15 * (v0 / 2) * (((1 + sin_gamma) / (at + g0)) + ((1 - sin_gamma) / (at - g0)))
+    return 1.16 * (v0 / 2) * (((1 + sin_gamma) / (at + g0)) + ((1 - sin_gamma) / (at - g0)))
+
 
 class APDG(object):
 

@@ -40,10 +40,12 @@ def lambda_t(t, t0, pv0, pr0):
     temp = transition_mat(t, t0) @ lambda_0
     return temp[0:3, :], -temp[3:6, :]
 
+
 class Status(Enum):
-    Evaluate_t2: 1
-    PDI: 2
-    Powered_descent: 3
+    Evaluate_t2 = 1
+    PDI = 2
+    Powered_descent = 3
+
 
 class UPG(object):
 
@@ -77,6 +79,7 @@ class UPG(object):
         self.m_0 = mass
         self.T_max = max_thrust
         self.T_min = max_thrust * min_throttle
+        self.min_throttle = min_throttle
         self.isp = specific_impulse
         self.t_0 = t_0 / self.time_multiplier
         self.t_1 = t_1 / self.time_multiplier   # t_1 is a normalized time interval
@@ -301,10 +304,6 @@ class UPG(object):
         self.t_2_solved = True
         self.status = Status.PDI
 
-    def v_go(self, isp, m0):
-        v_exh = isp * ge
-        return v_exh * np.log(m0 / self.__m_f)
-
     def update(self, r_t, v_t, mass, max_thrust, t_0):
         r_t = r_t / self.position_multiplier
         v_t = v_t / self.velocity_multiplier
@@ -312,9 +311,8 @@ class UPG(object):
 
         self.m_0 = mass
         if self.T_max != max_thrust:
-            min_thro = self.T_min / self.T_max
             self.T_max = max_thrust
-            self.T_min = max_thrust * min_thro
+            self.T_min = max_thrust * self.min_throttle
         self.t_0 = t_0 / self.time_multiplier
 
     def update_time(self):
@@ -341,11 +339,11 @@ class UPG(object):
     def t_f(self):
         if not self.solved:
             raise Exception("accessing variables before solved them")
-        return (self.z[7, :] - self.t_0) * self.time_multiplier
+        return (self.z[6, 0] - self.t_0) * self.time_multiplier
 
     @property
     def t_2(self):
-        if not self.solved:
+        if not self.t_2_solved:
             raise Exception("accessing variables before solved them")
         return self.__t_2 * self.time_multiplier
 
@@ -362,6 +360,11 @@ class UPG(object):
         return (self.t_2_fix - self.t_0) * self.time_multiplier
 
     @property
+    def v_go(self):
+        v_exh = self.isp * ge
+        return v_exh * np.log(self.m_0 / self.__m_f)
+
+    @property
     def thrust_direction(self):
         if not self.solved:
             raise Exception("accessing variables before solved them")
@@ -373,6 +376,6 @@ class UPG(object):
         if not self.solved:
             raise Exception("accessing variables before solved them")
         if self.t_1_fix < self.t_0 < self.t_2_fix:
-            return 0.00001
+            return 0.0001 * self.min_throttle
         else:
             return 1.
