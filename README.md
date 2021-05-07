@@ -4,7 +4,11 @@ universal powered guidance in Kerbal Space Program based on krpc
 Universal Powered Guidance is a versatile powered guidance developed by Lu, et al. [1-3] , which is based on optimal control theory. 
 By setting different constraints, the algorithms can be used for differnet purpose including landing, ascent, etc.
 
-currently, only powered descent module is being developed.
+currently, only powered descent module is implemented.
+## How to use
+In `target.json`, enter the target parameters.
+Especially, if you want just to land somewhere rather than to target, set `k` to 0.
+Run `Bolza-Landing.py` to get the guidance. The program will handle everything.
 
 ## References
 [1] Lu, Ping. "Propellant-optimal powered descent guidance." Journal of Guidance, Control, and Dynamics 41.4 (2018): 813-826.
