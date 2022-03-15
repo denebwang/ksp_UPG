@@ -1,46 +1,73 @@
-import numpy as np
-from scipy.optimize import root, minimize_scalar
+import logging
 from enum import Enum
+import numpy as np
+from numdifftools import Jacobian
+from scipy.optimize import root, minimize_scalar
+
 
 ge = 9.80665  # standard gravity which is used to calculate exhaust velocity
 
+logging.basicConfig(filename='upg.log',
+                    filemode='w',
+                    format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+                    datefmt='%H:%M:%S',
+                    level=logging.DEBUG)
 
-def transition_mat(t, t0):
-    """
-    state vector transfer matrix
-    :param t: final time
-    :param t0: initial time
-    :return: the corresponding transfer matrix(6 x 6)
+
+def transition_mat(dt: float) -> np.ndarray:
+    """State transition matrix
+
+    Args:
+        dt (float): The time interval
+
+    Returns:
+        np.ndarray: The state transition matrix(3x3)
     """
     return np.block(
-        [[np.cos(t - t0) * np.eye(3), np.sin(t - t0) * np.eye(3)],
-         [-np.sin(t - t0) * np.eye(3), np.cos(t - t0) * np.eye(3)]])
+        [[np.cos(dt) * np.eye(3), np.sin(dt) * np.eye(3)],
+         [-np.sin(dt) * np.eye(3), np.cos(dt) * np.eye(3)]])
 
 
-def gamma_mat(t, t0):
+def gamma_mat(t: float) -> np.ndarray:
+    """Gamma matrix is defined as\n
+    [sin(t) -cos(t)
+     cos(t)  sin(t)] \n
+     as R^6x6. Note that the input is absolute time, not delta time.
+
+    Args:
+        t (float): The final Time
+
+    Returns:
+        np.ndarray: The corresponding gamma matrix(6 x 6)
     """
-    matrix gamma defined in paper, used for calculate state vector
-    with thrust integral
-    :param t: final time
-    :param t0: initial time
-    :return: the corresponding gamma matrix(6 x 6)
-    """
-    return np.block([[np.sin(t - t0) * np.eye(3), -np.cos(t - t0) * np.eye(3)],
-                     [np.cos(t - t0) * np.eye(3), np.sin(t - t0) * np.eye(3)]])
+    return np.block([[np.sin(t) * np.eye(3), -np.cos(t) * np.eye(3)],
+                     [np.cos(t) * np.eye(3), np.sin(t) * np.eye(3)]])
 
 
-def lambda_t(t, t0, pv0, pr0):
+def lambda_t(t: float, t0: float, p_r_0: np.ndarray, p_v_0: np.ndarray):
+    """Calculate the costate vectors at the given time.
+
+    Args:
+        t (float): The final time
+        t0 (float): The initial time
+        p_r_0 : The initial costate of r(3x1)
+        p_v_0 : The initial costate of v(3x1)
+
+    Returns:
+        Vector p_r and p_v at the given time, respectively.
     """
-    calculate the costate vectors at t(dimensionless)
-    :param t: desired t
-    :param t0: initial t
-    :param pr0: initial Pr, 3x1
-    :param pv0: initial Pv, 3x1
-    :return: Pv,Pr at t
-    """
-    lambda_0 = np.vstack((pv0, -pr0))
-    temp = transition_mat(t, t0) @ lambda_0
-    return temp[0:3, :], -temp[3:6, :]
+    lambda_0 = np.vstack((p_r_0, p_v_0))
+    temp = transition_mat(t - t0) @ lambda_0
+    p_r_t, p_v_t = np.vsplit(temp, 2)
+    return p_r_t, p_v_t
+
+
+def K(t, p_v):
+    Lambda = np.split(transition_mat(t), 2)[-1]
+    norm = np.linalg.norm(p_v)
+    _1_pv = p_v / norm
+    temp = 1. / norm * (np.eye(3) - _1_pv @ _1_pv.T)
+    return temp @ Lambda
 
 
 class Status(Enum):
@@ -51,370 +78,445 @@ class Status(Enum):
 
 class UPG(object):
 
-    def __init__(
-            self, body,
-            r_f, v_f,  # target
-            r_t, v_t, mass,  # current states
-            max_thrust, min_throttle, specific_impulse, k,
-            t_0, t_1,  # time
-            pv0, pr0, t_f  # initial guesses
-    ):
-        # constants
-        self.r0 = body.equatorial_radius
-        self.g0 = body.surface_gravity
+    def __init__(self, r_0: float, g_0: float, r_target, v_target,  # target
+                 r_t, v_t, mass: float,  # current states
+                 max_thrust: float, min_throttle: float, specific_impulse: float, k: float,
+                 t_0: float, t_1: float,  # time
+                 p_r_0, p_v_0, t_f: float, t_2_bound: list  # initial guesses
+                 ):
+        """The UPG class encapsules the calculation of the UPG algorithm.
 
-        # multipliers to normalize variables
-        self.time_multiplier = np.sqrt(self.r0 / self.g0)
-        self.position_multiplier = self.r0
-        self.velocity_multiplier = np.sqrt(self.r0 * self.g0)
+        Args:
+            r_0 (float): The equatorial radius of the celestial body.
+            g_0 (float): The surface gravity of the body.
+            r_target (3x1): Vector pointing at target position.
+            v_target (3x1): The target velocity vector.
+            r_t (3x1): Current position.
+            v_t (3x1): Current velocity.
+            mass (float): Spacecraft's mass.
+            min_throttle (float): min throttle of the engine.
+            specific_impulse (float): engine's vaccum specific_impulse.
+            k (float): Coefficient for bolza landing.
+            t_0 (float): The current time.
+            t_1 (float): Duration of first burn.
+            p_r_0 (3x1): Costate vector of r(guess)
+            p_v_0 (3x1): Costate vector of v(guess)
+            t_f (float): Total time duration(guess)
+            t_2_bound (list): Upper and lower bound of t_2.
+        """
+        # constants
+        self.g_0 = g_0
+
+        # scalers to normalize variables for better numerical condition
+        self.t_scaler = np.sqrt(r_0 / self.g_0)
+        self.r_scaler = r_0
+        self.v_scaler = np.sqrt(r_0 * self.g_0)
 
         # targets
-        self.r_f = r_f / self.position_multiplier
-        self.v_f = v_f / self.velocity_multiplier
+        self.r_target = r_target / self.r_scaler
+        self.v_target = v_target / self.v_scaler
 
         # states
-        r_t = r_t / self.position_multiplier
-        v_t = v_t / self.velocity_multiplier
+        r_t = r_t / self.r_scaler
+        v_t = v_t / self.v_scaler
         self.x = np.vstack((r_t, v_t))
 
         # other needed variables
-        self.m_0 = mass
+        self.m = mass
         self.T_max = max_thrust
         self.T_min = max_thrust * min_throttle
         self.min_throttle = min_throttle
         self.isp = specific_impulse
-        self.t_0 = t_0 / self.time_multiplier
+        self.t_0 = 0.
         # t_1 is a normalized time interval
-        self.t_1 = t_1 / self.time_multiplier
+        self.t_1 = t_1 / self.t_scaler
         self.k = k  # coefficient in bolza problem
+        self.t_2_bound =\
+            [value / self.t_scaler for value in t_2_bound]  # boundary for t_2
 
         # guess
-        tf = t_f / self.time_multiplier + self.t_0
-        self.z = np.hstack((pv0.T, pr0.T, tf)).T
+        t_f = t_f / self.t_scaler
+        self.z = np.hstack((p_r_0.T, p_v_0.T, t_f)).T
 
         # store variables to avoid repeat calculation
-        self.__x_f = np.zeros((6, 1))
-        self.__m_f = 0.
-        self.__pv_f = np.zeros((3, 1))
-        self.__pr_f = np.zeros((3, 1))
+        self.x_final = np.zeros((6, 1))
+        self.m_final = 0.
+        self.pv_final = np.zeros((3, 1))
+        self.pr_final = np.zeros((3, 1))
 
         # variables to be used later
-        self.__t_2 = 0.
+        self.t_2 = 0.
+        self.t_solved = 0.
 
-        # fix t1 and t2 in main guidance loop
+        # save the start time
+        self.t_start = t_0 / self.t_scaler
 
-        self.t_1_fix = self.t_0 + self.t_1
-        self.t_2_fix = self.t_0
-
-        # to avoid access variables before solved
-        self.t_2_solved: bool = False
-        self.solved: bool = False
         self.status = Status.Evaluate_t2
+        self.convergence = False
+        self.last_err_msg = ""
 
-    def mass_t(self, t, t0, isp, m0, thrust):
+    def mass_t(self, t: float, t0: float, m_0: float, thrust: float) -> float:
+        """Calculate the mass at the given time t and initial mass m_0.
+
+        Args:
+            t (float): The final time
+            t0 (float): The initial time
+            m_0 (float): The initial mass
+            thrust (float): Engine's thrust during this time duration
+
+        Returns:
+            float: The spacecraft's mass at time t.
         """
-        calculate the expected mass at dimensionless time t
-        :param t0: initial time
-        :param t: dimensionless time
-        :param isp: engine's specific impulse
-        :param m0: initial mass
-        :param thrust: engine thrust
-        :return: mass at t
+        return m_0 - (t - t0) * self.t_scaler * thrust / (self.isp * ge)
+
+    def i(self, t: float, t_0: float, p_r_0, p_v_0, thrust: float, m_0: float):
+        """The integrand of thrust integral. The variable correspond to time t 
+            are first computed by t_0, then the integrand is evaluated.
+
+        Args:
+            t (float): Time at which the integrand is computed
+            t_0 (float): The initial time.
+            p_r_0 (ndarray): Initial costate vectors.
+            p_v_0 (ndarray): Initial costate vectors.
+            thrust (float): Engine's thrust during integration.
+            m_0 (float): Initial mass.
+
+        Returns:
+            ndarray: The stacked integrand[i_c, i_s].T
         """
-        return m0 - (t - t0) * self.time_multiplier * thrust / (isp * ge)
+        _, p_v_t = lambda_t(t, t_0, p_r_0, p_v_0)
+        p_v_t /= np.linalg.norm(p_v_t)
+        m_t = self.mass_t(t, t_0, m_0, thrust)
+        temp = p_v_t * thrust / (m_t * self.g_0)
+        return np.vstack((temp * np.cos(t), temp * np.sin(t)))
 
-    def x_t(self, x0, t, t0, t1, t2, pv0, pr0, thrust, min_thrust, isp, m0):
+    def j_i(self, t: float, t_0: float, p_r_0, p_v_0, thrust: float, m_0: float):
+        _, p_v_t = lambda_t(t, t_0, p_r_0, p_v_0)
+        K_t = K(t, p_v_t)
+        m_t = self.mass_t(t, t_0, m_0, thrust)
+        temp = thrust / (m_t * self.g_0)
+        out = temp * np.block([[np.cos(t) * np.eye(3)],
+                              [np.sin(t) * np.eye(3)]]) @ K_t
+        return out
+
+    def thrust_integral(self, t: float, t_0: float, p_r_0, p_v_0, thrust: float, m_0: float):
+        """Calculate thrust integral with milne's rule
+
+        Args:
+            t (float): Upper bound of integral
+            t_0 (float): Lower bound of integral
+            p_r_0 (ndarray): Costate vectors at lower bound, 3x1
+            p_v_0 (ndarray): Costate vectors at lower bound, 3x1
+            thrust (float): Engine's thrust during integration
+            m_0 (float): Initial mass at lower bound
+
+        Returns:
+            ndarray: a 6x1 vector representing the thrust integral, 
+            the cos term on the top and the sin term on the bottom.
         """
-        calculate state vector at given time t,this method also update the
-        final mass
-        :param x0: initial state vector
-        :param t: final time
-        :param t0: initial time
-        :param t1: first thrust switch time, which we turn thrust to T_min
-        :param t2: second thrust switch time, which we turn thrust back
-        :param pv0: initial Pv
-        :param pr0: initial Pr
-        :param thrust: vessel's max thrust
-        :param min_thrust: min thrust during descent; set to 0 for coast
-        :param isp: specific impulse
-        :param m0: initial mass
-        :return: the corresponding satate vector
+        coefs = [7., 32., 12., 32., 7.]
+        delta = (t - t_0) / 4.
+        inte = np.asarray([coefs[i] * self.i(t_0 + i * delta, t_0, p_r_0, p_v_0, thrust, m_0)
+                           for i in range(len(coefs))])
+        jac = np.asarray([coefs[i] * self.j_i(t_0 + i * delta, t_0, p_r_0, p_v_0, thrust, m_0)
+                          for i in range(len(coefs))])
+        return ((t - t_0) / 90.) * np.sum(inte, axis=0), ((t - t_0) / 90.) * np.sum(jac, axis=0)
+
+    def state_at_t(self, t: float, t0: float, x_0, p_r_0, p_v_0, thrust: float, m_0: float):
+        """Calculate the state `x`, costate vectors `p_r` & `p_v` and the mass `m` 
+        at the given time `t`.
+
+        Args:
+            t (float): The final time
+            t0 (float): The initial time
+            x_0 (_type_): State vector at the initial time
+            p_r_0 (_type_): Initial costate vectors
+            p_v_0 (_type_): Initial costate vectors
+            thrust (float): Engine's thrust during this time
+            m_0 (float): Initial mass of the spacecraft at initial time.
+
+        Returns:
+            The state `x`, costate vectors `p_r` & `p_v` and the mass `m` 
+        at the given time `t`, respectively.
         """
+        I_t, j_i = self.thrust_integral(t, t0, p_r_0, p_v_0, thrust, m_0)
+        x_t = transition_mat(t - t0) @ x_0 + gamma_mat(t) @ I_t
+        j_i = gamma_mat(t) @ j_i
+        p_r_t, p_v_t = lambda_t(t, t0, p_r_0, p_v_0)
+        m_t = self.mass_t(t, t0, m_0, thrust)
+        return x_t, p_r_t, p_v_t, m_t, j_i
 
-        def i(t, t0, pv, pr, thrust, isp, m0):
-            i_c = self.thrust_integral('c', t, t0, pv, pr, thrust, isp, m0)
-            i_s = self.thrust_integral('s', t, t0, pv, pr, thrust, isp, m0)
-            return np.vstack((i_c, i_s))
+    def update_final_state(self, t_f: float, p_r_0, p_v_0):
+        """Calculate the final state of the guidance. The final costate vectors
+        and the final mass are updated togather.
 
-        def transfer(t, t0, x_0, pv0, pr0, thrust, isp, m0):
-            i_t = i(t, t0, pv0, pr0, thrust, isp, m0)
-            x_temp = transition_mat(t, t0) @ x_0 + gamma_mat(t, t0) @ i_t
-            pv_t, pr_t = lambda_t(t, t0, pv0, pr0)
-            m_t = self.mass_t(t, t0, isp, m0, thrust)
-            return x_temp, pv_t, pr_t, m_t
+        Args:
+            t_f (float): The final time as interval from current time
+        """
+        # t_elapsed = self.t_0 - self.t_start
+        t_1 = self.t_1
+        t_2 = t_1 + self.t_2
+        t_f = t_f
+        if self.t_0 < t_1:  # first burn arc
+            # state at t1
+            x_t, p_r_t, p_v_t, m_t, j_i = self.state_at_t(
+                t_1, self.t_0, self.x, p_r_0, p_v_0, self.T_max, self.m)
+            dx1_dlam = j_i
+            
+            # state at t2
+            x_t, p_r_t, p_v_t, m_t, j_i = self.state_at_t(
+                t_2, t_1, x_t, p_r_t, p_v_t, self.T_min, m_t)
+            dx2_dlam = transition_mat(t_2 - t_1) @ dx1_dlam + j_i
+            
+            # state at t_final
+            self.x_final, self.pr_final, self.pv_final, self.m_final, j_i = self.state_at_t(
+                t_f, t_2, x_t, p_r_t, p_v_t, self.T_max, m_t)
+            
+            dxf_dlam = transition_mat(t_f - t_2) @ dx2_dlam + j_i
+            
+            dxf_dtf = -gamma_mat(t_f - t_2) @ x_t +\
+                transition_mat(t_f) @ self.thrust_integral(t_f, t_2, p_r_t, p_v_t, self.T_max, m_t)[0] +\
+                gamma_mat(t_f) @ self.i(t_f, t_f, self.pr_final, self.pv_final, self.T_max, self.m_final)
 
-        if t1 > t2:
-            print("warning: t1>t2, t1=" + str(t1) + " t2=" + str(t2))
-            t2 = t1
-        if t0 < t1:
-            # at t1
-            x_t, pv_t, pr_t, m_t = transfer(
-                t1, t0, x0, pv0, pr0, thrust, isp, m0)
-            # at t2
-            x_t, pv_t, pr_t, m_t = transfer(
-                t2, t1, x_t, pv_t, pr_t, min_thrust, isp, m_t)
+        elif self.t_0 < t_2:  # second burn arc, namely throttle back phase
+            # state at t2
+            x_t, p_r_t, p_v_t, m_t, j_i = self.state_at_t(
+                t_2, self.t_0, self.x, p_r_0, p_v_0, self.T_min, self.m)
+            dx2_dlam = j_i
+            
             # at t
-            x_t, self.__pv_f, self.__pr_f, self.__m_f = transfer(
-                t, t2, x_t, pv_t, pr_t, thrust, isp, m_t)
-        else:  # t0 >= t1:
-            if t0 < t2:
-                # at t2
-                x_t, pv_t, pr_t, m_t = transfer(
-                    t2, t0, x0, pv0, pr0, min_thrust, isp, m0)
-                # at t
-                x_t, self.__pv_f, self.__pr_f, self.__m_f = transfer(
-                    t, t2, x_t, pv_t, pr_t, thrust, isp, m_t)
-            else:  # t0 >= t2:
-                x_t, self.__pv_f, self.__pr_f, self.__m_f = transfer(
-                    t, t0, x0, pv0, pr0, thrust, isp, m0)
-        return x_t
+            self.x_final, self.pr_final, self.pv_final, self.m_final, j_i = self.state_at_t(
+                t_f, t_2, x_t, p_r_t, p_v_t, self.T_max, m_t)
+            
+            dxf_dlam = transition_mat(t_f - t_2) @ dx2_dlam + j_i
+            
+            dxf_dtf = -gamma_mat(t_f-t_2) @ x_t +\
+                transition_mat(t_f) @ self.thrust_integral(t_f, t_2, p_r_t, p_v_t, self.T_max, m_t)[0] +\
+                gamma_mat(t_f) @ self.i(t_f, t_f, self.pr_final, self.pv_final, self.T_max, self.m_final)
 
-    def thrust_integral(self, type_name, t, t0, pv0, pr0, thrust, isp, m0):
-        """
-        calculate thrust integral with milne's rule
-        :param type_name: determins this is the cos integral or sin integral,
-        should be 'c' or 's'
-        :param t: end time
-        :param t0: initial time
-        :param pv0: initial pv
-        :param pr0: initial pr
-        :param thrust: engine thrust
-        :param isp: engine isp
-        :param m0: initial mass
-        :return: the estimated thrust integral
-        """
+        elif self.t_0 >= t_2:  # final burn
+            self.x_final, self.pr_final, self.pv_final, self.m_final, j_i = self.state_at_t(
+                t_f, self.t_0, self.x, p_r_0, p_v_0, self.T_max, self.m)
+            
+            dxf_dlam = j_i
+            
+            dxf_dtf = -gamma_mat(t_f-self.t_0) @ self.x +\
+                transition_mat(t_f) @ self.thrust_integral(t_f, self.t_0, p_r_0, p_v_0, self.T_max, self.m)[0] +\
+                gamma_mat(t_f) @ self.i(t_f, t_f, self.pr_final, self.pv_final, self.T_max, self.m_final)
 
-        def i(t):
-            pv, _ = lambda_t(t, t0, pv0, pr0)
-            pv = pv / np.linalg.norm(pv)
-            temp = pv * thrust / (self.mass_t(t, t0, isp, m0, thrust) *
-                                  self.g0)
-            if type_name == 'c':
-                return temp * np.cos(t - t0)
-            elif type_name == 's':
-                return temp * np.sin(t - t0)
-            else:
-                raise Exception()
+        return dxf_dlam, dxf_dtf
 
-        delta = (t - t0) / 4.
-        return ((t - t0) / 90.) * (7 * i(t0) + 32 * i(t0 + delta) +
-                                   12 * i(t0 + 2 * delta) +
-                                   32 * i(t0 + 3 * delta) +
-                                   7 * i(t0 + 4 * delta))
+    def target_function_bl(self, z, k, use_jac=False):
+        p_r_0, p_v_0, t_f = np.vsplit(z.reshape(7, 1), [3, 6])
 
-    def target_function_sl(self, z, r_f, v_f, x_0, t_0, t_1, t_2,
-                           thrust, min_thrust, isp, m0):
-        """
-        target function for soft landing
-        :param z: solution to be optimized
-        :param r_f: target position
-        :param v_f: target velocity
-        :param x_0: initial state vector
-        :param t_0: initial time
-        :param t_1: first thrust switch time
-        :param t_2: second thrust switch time
-        :param thrust: max thrust
-        :param min_thrust: min thrust
-        :param isp: specific impulse
-        :param m0: initial mass
-        :return: the 7 equations for solving z
-        """
-        return self.target_function_bl(
-            z, 0, r_f, v_f, x_0, t_0, t_1, t_2, thrust, min_thrust, isp, m0)
+        dxf_dlam, dxf_dtf = self.update_final_state(t_f, p_r_0, p_v_0)
+        r_final, v_final = np.vsplit(self.x_final, 2)
+        pvf_norm = np.linalg.norm(self.pv_final)
 
-    def target_function_bl(self, z, k, r_f, v_f, x_0, t_0, t_1, t_2,
-                           thrust, min_thrust, isp, m0):
-        """
-        target function for Bolza landing
-        :param k: coefficient for performance
-        :param z: solution to be optimized
-        :param r_f: target position
-        :param v_f: target velocity
-        :param x_0: initial state vector
-        :param t_0: initial time
-        :param t_1: first thrust switch time
-        :param t_2: second thrust switch time
-        :param thrust: max thrust
-        :param min_thrust: min thrust
-        :param isp: specific impulse
-        :param m0: initial mass
-        :return: the 7 equations for solving z
-        """
-        pv = z[0:3].reshape(-1, 1)
-        pr = z[3:6].reshape(-1, 1)
-        tf = z[6]
         # final position constraint
-        self.__x_f = self.x_t(
-            x_0, tf, t_0, t_1, t_2, pv, pr, thrust, min_thrust, isp, m0)
-        r_tf = self.__x_f[0:3, :]
-        s1 = r_tf.T @ r_tf - r_f.T @ r_f
-        # final velocity constraint
-        v_tf = self.__x_f[3:6, :]
-        s2 = v_tf - v_f  # s2 includes 3 equations
-        # transversality condition
-        s3 = self.__pr_f.T @ v_tf - self.__pv_f.T @ r_tf + \
-            np.linalg.norm(self.__pv_f) * thrust / (self.__m_f * self.g0) - 1
-        s4 = r_tf[2, 0] * self.__pr_f[0, 0] - r_tf[0, 0] * self.__pr_f[2, 0] +\
-            k * (r_tf[0, 0] * r_f[2, 0] - r_tf[2, 0] * r_f[0, 0])
-        s5 = r_tf[2, 0] * self.__pr_f[1, 0] - r_tf[1, 0] * self.__pr_f[2, 0] +\
-            k * (r_tf[1, 0] * r_f[2, 0] - r_tf[2, 0] * r_f[1, 0])
-        return [s1[0, 0], s2[0, 0], s2[1, 0], s2[2, 0], s3[0, 0], s4, s5]
+        s_1 = (r_final.T @ r_final - self.r_target.T @ self.r_target).flatten()
 
-    def target_function_pl(self, z, r_f, v_f, x_0, t_0, t_1, t_2,
-                           thrust, min_thrust, isp, m0):
-        pv = z[0:3].reshape(-1, 1)
-        pr = z[3:6].reshape(-1, 1)
-        tf = z[6]
-        # final position constraint
-        self.__x_f = self.x_t(
-            x_0, tf, t_0, t_1, t_2, pv, pr, thrust, min_thrust, isp, m0)
-        r_tf = self.__x_f[0:3, :]
-        s1 = r_tf - r_f  # s1 includes 3 equations
         # final velocity constraint
-        v_tf = self.__x_f[3:6, :]
-        s2 = v_tf - v_f  # s2 includes 3 equations
+        s_2 = (v_final - self.v_target).flatten()
         # transversality condition
-        s3 = self.__pr_f.T @ v_tf - self.__pv_f.T @ r_tf + \
-            np.linalg.norm(self.__pv_f) * thrust / (self.__m_f * self.g0) - 1
-        return [s1[0, 0], s1[1, 0], s1[2, 0],
-                s2[0, 0], s2[1, 0], s2[2, 0], s3[0, 0]]
+        s_3 = (self.pr_final.T @ v_final - self.pv_final.T @ r_final +
+               np.linalg.norm(self.pv_final) * self.T_max /
+               (self.m_final * self.g_0) - 1.).flatten()
+        # reduced transversality conditions
+        a_1 = a_2 = None
+        if r_final[2, 0] != 0.:  # r_3 not 0
+            a_1 = np.array(
+                [[0,  0,  1.],
+                 [0,  0,  0],
+                 [-1., 0,  0]]
+            )
+            a_2 = np.array(
+                [[0,  0,  0],
+                 [0,  0,  1.],
+                 [0, -1., 0]]
+            )
+        elif r_final[1, 0] != 0.:  # r_2 not 0
+            a_1 = np.array(
+                [[0,  1., 0],
+                 [-1., 0,  0],
+                 [0,  0,  0]]
+            )
+            a_2 = np.array(
+                [[0,  0,  0],
+                 [0,  0, -1.],
+                 [0,  1., 0]]
+            )
+        else:  # r_1
+            a_1 = np.array(
+                [[0, -1., 0],
+                 [1., 0,  0],
+                 [0,  0,  0]]
+            )
+            a_2 = np.array(
+                [[0,  0, -1.],
+                 [0,  0,  0],
+                 [1., 0,  0]]
+            )
+        s_4 = ((a_1 @ r_final).T @ (self.pr_final +
+                                   2. * k * (r_final - self.r_target))).flatten()
+        s_5 = ((a_2 @ r_final).T @ (self.pr_final +
+                                   2. * k * (r_final - self.r_target))).flatten()
+        '''
+        if k != 0:  # normalize s4 and s5 to conpensate for k
+            s_4 = s_4 / k
+            s_5 = s_5 / k'''
+        s = np.concatenate([s_1, s_2, s_3, s_4, s_5])
+        s = list(s)
+        if use_jac is True:
+            # calculate jacobian
+            dr_dlam, dv_dlam = np.split(dxf_dlam, 2, axis=0)
+            dr_dtf, dv_dtf = np.split(dxf_dtf, 2, axis=0)
+            dpr_dlam, dpv_dlam = np.split(transition_mat(t_f), 2, axis=0)
+            dpr_dtf, dpv_dtf = np.split(
+                -gamma_mat(t_f) @ np.concatenate([p_r_0, p_v_0], axis=0), 2, axis=0)
+            
 
-    def target_function_t2_sl(self, t2, z0, r_f, v_f, x_0, t_0, t_1,
-                              thrust, min_thrust, isp, m0):
+            j_1 = 2. * np.block([r_final.T @ dr_dlam, r_final.T @ dr_dtf])
+            j_2 = np.eye(3) @ np.block([dv_dlam, dv_dtf])
+            j_3 = np.block([
+                v_final.T @ dpr_dlam + self.pr_final.T @ dv_dlam -
+                r_final.T @ dpv_dlam - self.pv_final.T @ dr_dlam +
+                self.T_max / self.m_final / self.g_0 /
+                pvf_norm * (self.pv_final.T @ dpv_dlam),
+                v_final.T @ dpr_dtf + self.pr_final.T @ dv_dtf -
+                r_final.T @ dpv_dtf - self.pv_final.T @ dr_dtf +
+                self.T_max / self.m_final / self.g_0 / pvf_norm * (self.pv_final.T @ dpv_dtf) +
+                self.T_max ** 2 * pvf_norm * self.t_scaler /
+                self.m_final ** 2 / self.g_0 / (self.isp * ge)
+            ])
+            temp1 = (self.pr_final + 2. * k * (r_final - self.r_target)).T
+            j_4 = np.block([
+                temp1 @ a_1 @ dr_dlam +
+                r_final.T @ a_1.T @ (dpr_dlam + 2. * k * dr_dlam),
+                temp1 @ a_1 @ dr_dtf +
+                r_final.T @ a_1.T @ (dpr_dtf + 2. * k * dr_dtf)
+            ])
+            j_5 = np.block([
+                temp1 @ a_2 @ dr_dlam +
+                r_final.T @ a_2.T @ (dpr_dlam + 2. * k * dr_dlam),
+                temp1 @ a_2 @ dr_dtf +
+                r_final.T @ a_2.T @ (dpr_dtf + 2. * k * dr_dtf)
+            ])
+
+            jac = np.concatenate([j_1, j_2, j_3, j_4, j_5])
+            return (s, jac)
+        return s
+
+    def target_function_t_2(self, t_2):
         # m_f is calculated during root finding
-        self.z = root(
-            self.target_function_sl, z0,
-            args=(
-                r_f, 0. * v_f, x_0, t_0, t_1, t2, thrust, min_thrust, isp, m0),
-            method='lm',
-            jac=False).x.reshape(-1, 1)
-        return m0 - self.__m_f
+        self.t_2 = t_2
+        while True:
+            sol = root(self.target_function_bl, self.z, args=(0.,), jac=False)
+            if sol.success:
+                break
+        self.z = sol.x.reshape(-1, 1)
+        return self.m - self.m_final
 
     def solve(self, mode: str):
-        if not self.t_2_solved:
-            raise Exception("t2 is not solved before solving guidance!")
-        if mode == 'bolza':
-            self.z = root(
-                fun=self.target_function_bl, x0=self.z,
-                args=(
-                    self.k, self.r_f, self.v_f, self.x,
-                    self.t_0, self.t_1_fix, self.t_2_fix,
-                    self.T_max, self.T_min, self.isp, self.m_0),
-                # method='lm',
-                jac=False).x.reshape(-1, 1)
-        elif mode == 'soft':
-            self.z = root(
-                fun=self.target_function_sl, x0=self.z,
-                args=(
-                    self.r_f, self.v_f, self.x,
-                    self.t_0, self.t_1_fix, self.t_2_fix,
-                    self.T_max, self.T_min, self.isp, self.m_0),
-                # method='lm',
-                jac=False).x.reshape(-1, 1)
-        elif mode == 'pinpoint':
-            self.z = root(
-                fun=self.target_function_pl, x0=self.z,
-                args=(
-                    self.r_f, self.v_f, self.x,
-                    self.t_0, self.t_1_fix, self.t_2_fix,
-                    self.T_max, self.T_min, self.isp, self.m_0),
-                jac=False).x.reshape(-1, 1)
-        else:
-            raise Exception("Incorrect mode")
-        self.solved = True
+        sol = None
+        z = self.new_z()
+        k = self.k if mode == 'bolza' else 0.
+        sol = root(fun=self.target_function_bl, x0=z, args=(k,), jac=False)
+        '''logging.debug("diffs:")
+        logging.debug('\n' + str(Jacobian(self.target_function_bl)(z, k=k)-
+                      self.target_function_bl(z, k, True)[1]))'''
+        
+
+        if sol.success:
+            z = sol.x
+            self.z = z.reshape(7, 1)
+            self.t_solved = self.t_0
+
+        self.norm = np.linalg.norm(sol.fun)
+        self.convergence = sol.success
+        self.last_err_msg = sol.message
 
     def solve_t_2(self):
-        t_2 = minimize_scalar(  # bounds are set to between t1 and tf
-            self.target_function_t2_sl, bounds=(self.t_1_fix, self.z[6, 0]),
-            args=(self.z, self.r_f, self.v_f, self.x, self.t_0, self.t_1_fix,
-                  self.T_max, self.T_min, self.isp, self.m_0), method='Bounded'
-        ).x
-        self.__t_2 = t_2 - self.t_0  # convert to time interval
-        self.t_2_solved = True
-        self.status = Status.PDI
+        """Calculates the optimal t_2.
+        """
+        print("Terminate program if it stucks at solving t_2.")
+        sol = minimize_scalar(
+            self.target_function_t_2, bounds=self.t_2_bound, method='Bounded')
+        # self.t_2 = sol.x
+        # t_2 is updated during solving, no need to assign.
+        if sol.success:
+            self.status = Status.PDI
+        else:
+            print("Solving t_2 failed, retry...")
+            self.solve_t_2()
 
-    def update(self, r_t, v_t, mass, max_thrust, t_0):
-        r_t = r_t / self.position_multiplier
-        v_t = v_t / self.velocity_multiplier
+    def update_state(self, r_t, v_t, mass, max_thrust, t_0):
+        r_t = r_t / self.r_scaler
+        v_t = v_t / self.v_scaler
         self.x = np.vstack((r_t, v_t))
 
-        self.m_0 = mass
+        self.m = mass
         if self.T_max != max_thrust:
             self.T_max = max_thrust
             self.T_min = max_thrust * self.min_throttle
-        self.t_0 = t_0 / self.time_multiplier
 
-    def update_time(self):
-        self.t_1_fix = self.t_0 + self.t_1
-        self.t_2_fix = self.t_0 + self.__t_2
+        self.t_0 = t_0 / self.t_scaler - self.t_start
+
+    def update_start_time(self, t_0):
+        self.t_start = t_0 / self.t_scaler
+
+    def new_z(self):
+        p_r_0, p_v_0, t_f = np.vsplit(self.z, [3, 6])
+        p_r, p_v = lambda_t(self.t_0, self.t_solved, p_r_0, p_v_0)
+        return np.concatenate([p_r, p_v, t_f])
 
     def set_target(self, r_f, v_f):
-        self.r_f = r_f / self.position_multiplier
-        self.v_f = v_f / self.velocity_multiplier
+        self.r_target = r_f / self.r_scaler
+        self.v_target = v_f / self.v_scaler
 
     @property
-    def r_tf(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        return self.__x_f[0:3, :] * self.position_multiplier
+    def r_final(self):
+        return self.x_final[0:3, :] * self.r_scaler
 
     @property
-    def v_tf(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        return self.__x_f[3:6, :] * self.velocity_multiplier
+    def v_final(self):
+        return self.x_final[3:6, :] * self.v_scaler
 
     @property
     def t_f(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        return (self.z[6, 0] - self.t_0) * self.time_multiplier
+        return (self.z[6, 0] - self.t_0).item() * self.t_scaler
 
     @property
-    def t_2(self):
-        if not self.t_2_solved:
-            raise Exception("accessing variables before solved them")
-        return self.__t_2 * self.time_multiplier
+    def get_t_2(self):
+        return self.t_2.item() * self.t_scaler
 
     @property
     def t_1_go(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        return (self.t_1_fix - self.t_0) * self.time_multiplier
+        return (self.t_1 - self.t_0).item() * self.t_scaler
 
     @property
     def t_2_go(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        return (self.t_2_fix - self.t_0) * self.time_multiplier
+        return (self.t_2 + self.t_1 - self.t_0).item() * self.t_scaler
 
     @property
     def v_go(self):
         v_exh = self.isp * ge
-        return v_exh * np.log(self.m_0 / self.__m_f)
+        return v_exh * np.log(self.m / self.m_final).item()
+
+    @property
+    def last_convergence(self):
+        return (self.t_0 - self.t_solved) * self.t_scaler
 
     @property
     def thrust_direction(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        pv = self.z[0:3, :]
-        return pv / np.linalg.norm(pv)
+        z = self.new_z()
+        pr, pv, tf = np.vsplit(z, [3, 6])
+        pv = pv / np.linalg.norm(pv)
+        return tuple(pv.flatten())
 
     @property
     def throttle(self):
-        if not self.solved:
-            raise Exception("accessing variables before solved them")
-        if self.t_1_fix < self.t_0 < self.t_2_fix:
-            return 0.0001 * self.min_throttle
+        if self.t_1 < self.t_0 < self.t_1 + self.t_2:
+            return 0.0001 if self.k != 0. else 0.
         else:
             return 1.
