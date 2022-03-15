@@ -1,5 +1,6 @@
 # ksp_UPG
 
+<<<<<<< HEAD
 universal powered guidance in Kerbal Space Program based on krpc
 
 ## 1. About UPG
@@ -9,6 +10,13 @@ Universal Powered Guidance is a versatile powered guidance developed by Lu, et a
 By setting different constraints, the algorithms can be used for differnet purpose including landing, ascent, etc. Here only the powered descent is implemented.
 
 
+=======
+currently, only powered descent module is implemented.
+## How to use
+In `target.json`, enter the target parameters.
+Especially, if you want just to land somewhere rather than to target, set `k` to 0.
+Run `Bolza-Landing.py` to get the guidance. The program will handle everything.
+>>>>>>> 9ef79e3d5a96d53379fa8f3bc95419f1f6ae55bb
 
 ## References
 
