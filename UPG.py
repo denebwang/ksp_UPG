@@ -1,4 +1,4 @@
-import logging
+
 from enum import Enum
 import numpy as np
 from numdifftools import Jacobian
@@ -6,12 +6,6 @@ from scipy.optimize import root, minimize_scalar
 
 
 ge = 9.80665  # standard gravity which is used to calculate exhaust velocity
-
-logging.basicConfig(filename='upg.log',
-                    filemode='w',
-                    format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
-                    datefmt='%H:%M:%S',
-                    level=logging.DEBUG)
 
 
 def transition_mat(dt: float) -> np.ndarray:
@@ -254,13 +248,13 @@ class UPG(object):
             t_f (float): The final time as interval from current time
         """
         # t_elapsed = self.t_0 - self.t_start
-        t_1 = self.t_1
-        t_2 = t_1 + self.t_2
-        t_f = t_f
-        if self.t_0 < t_1:  # first burn arc
+        t_1 = self.t_1 - self.t_0
+        t_2 = self.t_1 + self.t_2 - self.t_0
+        t_f = t_f - self.t_0
+        if 0. < t_1:  # first burn arc
             # state at t1
             x_t, p_r_t, p_v_t, m_t, j_i = self.state_at_t(
-                t_1, self.t_0, self.x, p_r_0, p_v_0, self.T_max, self.m)
+                t_1, 0., self.x, p_r_0, p_v_0, self.T_max, self.m)
             dx1_dlam = j_i
             
             # state at t2
@@ -278,10 +272,10 @@ class UPG(object):
                 transition_mat(t_f) @ self.thrust_integral(t_f, t_2, p_r_t, p_v_t, self.T_max, m_t)[0] +\
                 gamma_mat(t_f) @ self.i(t_f, t_f, self.pr_final, self.pv_final, self.T_max, self.m_final)
 
-        elif self.t_0 < t_2:  # second burn arc, namely throttle back phase
+        elif 0. < t_2:  # second burn arc, namely throttle back phase
             # state at t2
             x_t, p_r_t, p_v_t, m_t, j_i = self.state_at_t(
-                t_2, self.t_0, self.x, p_r_0, p_v_0, self.T_min, self.m)
+                t_2, 0., self.x, p_r_0, p_v_0, self.T_min, self.m)
             dx2_dlam = j_i
             
             # at t
@@ -294,14 +288,14 @@ class UPG(object):
                 transition_mat(t_f) @ self.thrust_integral(t_f, t_2, p_r_t, p_v_t, self.T_max, m_t)[0] +\
                 gamma_mat(t_f) @ self.i(t_f, t_f, self.pr_final, self.pv_final, self.T_max, self.m_final)
 
-        elif self.t_0 >= t_2:  # final burn
+        else:  # final burn
             self.x_final, self.pr_final, self.pv_final, self.m_final, j_i = self.state_at_t(
-                t_f, self.t_0, self.x, p_r_0, p_v_0, self.T_max, self.m)
+                t_f, 0., self.x, p_r_0, p_v_0, self.T_max, self.m)
             
             dxf_dlam = j_i
             
-            dxf_dtf = -gamma_mat(t_f-self.t_0) @ self.x +\
-                transition_mat(t_f) @ self.thrust_integral(t_f, self.t_0, p_r_0, p_v_0, self.T_max, self.m)[0] +\
+            dxf_dtf = -gamma_mat(t_f - 0.) @ self.x +\
+                transition_mat(t_f) @ self.thrust_integral(t_f, 0, p_r_0, p_v_0, self.T_max, self.m)[0] +\
                 gamma_mat(t_f) @ self.i(t_f, t_f, self.pr_final, self.pv_final, self.T_max, self.m_final)
 
         return dxf_dlam, dxf_dtf
@@ -320,8 +314,7 @@ class UPG(object):
         s_2 = (v_final - self.v_target).flatten()
         # transversality condition
         s_3 = (self.pr_final.T @ v_final - self.pv_final.T @ r_final +
-               np.linalg.norm(self.pv_final) * self.T_max /
-               (self.m_final * self.g_0) - 1.).flatten()
+               pvf_norm * self.T_max / (self.m_final * self.g_0) - 1.).flatten()
         # reduced transversality conditions
         a_1 = a_2 = None
         if r_final[2, 0] != 0.:  # r_3 not 0
@@ -361,10 +354,10 @@ class UPG(object):
                                    2. * k * (r_final - self.r_target))).flatten()
         s_5 = ((a_2 @ r_final).T @ (self.pr_final +
                                    2. * k * (r_final - self.r_target))).flatten()
-        '''
-        if k != 0:  # normalize s4 and s5 to conpensate for k
-            s_4 = s_4 / k
-            s_5 = s_5 / k'''
+        # normalize s4 and s5 to conpensate for k
+        scaler = np.sqrt(1. + k ** 2)
+        s_4 /= scaler
+        s_5 /= scaler
         s = np.concatenate([s_1, s_2, s_3, s_4, s_5])
         s = list(s)
         if use_jac is True:
@@ -402,11 +395,58 @@ class UPG(object):
                 temp1 @ a_2 @ dr_dtf +
                 r_final.T @ a_2.T @ (dpr_dtf + 2. * k * dr_dtf)
             ])
+            j_4 /= scaler
+            j_5 /= scaler
 
             jac = np.concatenate([j_1, j_2, j_3, j_4, j_5])
             return (s, jac)
         return s
 
+    def target_function_pl(self, z, use_jac=False):
+        p_r_0, p_v_0, t_f = np.vsplit(z.reshape(7, 1), [3, 6])
+
+        dxf_dlam, dxf_dtf = self.update_final_state(t_f, p_r_0, p_v_0)
+        r_final, v_final = np.vsplit(self.x_final, 2)
+        pvf_norm = np.linalg.norm(self.pv_final)
+
+        # final position constraint
+        scaler = 1e-5
+        s_1 = scaler * (r_final - self.r_target).flatten() # scale down for better convergence
+
+        # final velocity constraint
+        s_2 = (v_final - self.v_target).flatten()
+        # transversality condition
+        s_3 = (self.pr_final.T @ v_final - self.pv_final.T @ r_final +
+               pvf_norm * self.T_max / (self.m_final * self.g_0) - 1.).flatten()
+        s = np.concatenate([s_1, s_2, s_3])
+        s = list(s)
+        
+        if use_jac is True:
+            # calculate jacobian
+            dr_dlam, dv_dlam = np.split(dxf_dlam, 2, axis=0)
+            dr_dtf, dv_dtf = np.split(dxf_dtf, 2, axis=0)
+            dpr_dlam, dpv_dlam = np.split(transition_mat(t_f), 2, axis=0)
+            dpr_dtf, dpv_dtf = np.split(
+                -gamma_mat(t_f) @ np.concatenate([p_r_0, p_v_0], axis=0), 2, axis=0)
+            
+            j_1 = scaler * np.eye(3) @ np.block([dr_dlam, dr_dtf])
+            j_2 = np.eye(3) @ np.block([dv_dlam, dv_dtf])
+            j_3 = np.block([
+                v_final.T @ dpr_dlam + self.pr_final.T @ dv_dlam -
+                r_final.T @ dpv_dlam - self.pv_final.T @ dr_dlam +
+                self.T_max / self.m_final / self.g_0 /
+                pvf_norm * (self.pv_final.T @ dpv_dlam),
+                v_final.T @ dpr_dtf + self.pr_final.T @ dv_dtf -
+                r_final.T @ dpv_dtf - self.pv_final.T @ dr_dtf +
+                self.T_max / self.m_final / self.g_0 / pvf_norm * (self.pv_final.T @ dpv_dtf) +
+                self.T_max ** 2 * pvf_norm * self.t_scaler /
+                self.m_final ** 2 / self.g_0 / (self.isp * ge)
+            ])
+
+            jac = np.concatenate([j_1, j_2, j_3])
+            return (s, jac)
+        return s
+        
     def target_function_t_2(self, t_2):
         # m_f is calculated during root finding
         self.t_2 = t_2
@@ -421,11 +461,10 @@ class UPG(object):
         sol = None
         z = self.new_z()
         k = self.k if mode == 'bolza' else 0.
-        sol = root(fun=self.target_function_bl, x0=z, args=(k,), jac=False)
-        '''logging.debug("diffs:")
-        logging.debug('\n' + str(Jacobian(self.target_function_bl)(z, k=k)-
-                      self.target_function_bl(z, k, True)[1]))'''
-        
+        if mode == 'pinpoint':
+            sol = root(fun=self.target_function_pl, x0=z, args=(True,), jac=True)
+        else:
+            sol = root(fun=self.target_function_bl, x0=z, args=(k, True), jac=True)        
 
         if sol.success:
             z = sol.x
@@ -433,6 +472,7 @@ class UPG(object):
             self.t_solved = self.t_0
 
         self.norm = np.linalg.norm(sol.fun)
+        self.fun = sol.fun
         self.convergence = sol.success
         self.last_err_msg = sol.message
 
