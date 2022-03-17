@@ -21,6 +21,7 @@ class APDG(object):
         self.v_f = -v_f * up
         self.t_f = t_f
         self.g_0 = -g_0 * up
+        self.up = up
         self.k_r = k_r
         
         k = (a_f_k - 1.) / (k_r / 6. - 1.) + 1.
@@ -44,7 +45,7 @@ class APDG(object):
         a_t = (2 * (1 - self.k_r / 3.) / self.t_go) * (self.v_f - self.v_0) +\
             (self.k_r / self.t_go ** 2) * (self.r_f - self.r_0 - self.v_0 * self.t_go) + \
             (self.k_r - 6.)/ 6. * self.a_f + (self.k_r - 12.)/ 6. * self.g_0
-        self.a_t = a_t - self.g_0
+        self.a_t = a_t# - self.g_0
 
     @property
     def thrust_direction(self):
