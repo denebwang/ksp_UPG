@@ -1,7 +1,6 @@
 
 from enum import Enum
 import numpy as np
-from numdifftools import Jacobian
 from scipy.optimize import root, minimize_scalar
 
 
@@ -68,6 +67,8 @@ class Status(Enum):
     Evaluate_t2 = 1
     PDI = 2
     Powered_descent = 3
+    Terminal = 4
+    Finished = 5
 
 
 class UPG(object):
@@ -147,6 +148,7 @@ class UPG(object):
 
         self.status = Status.Evaluate_t2
         self.convergence = False
+        self.solver_status = 0
         self.last_err_msg = ""
 
     def mass_t(self, t: float, t0: float, m_0: float, thrust: float) -> float:
@@ -451,7 +453,7 @@ class UPG(object):
         # m_f is calculated during root finding
         self.t_2 = t_2
         while True:
-            sol = root(self.target_function_bl, self.z, args=(0.,), jac=False)
+            sol = root(self.target_function_bl, self.z, args=(0.,), jac=False, options={'xtol':1e-7})
             if sol.success:
                 break
         self.z = sol.x.reshape(-1, 1)
@@ -462,9 +464,9 @@ class UPG(object):
         z = self.new_z()
         k = self.k if mode == 'bolza' else 0.
         if mode == 'pinpoint':
-            sol = root(fun=self.target_function_pl, x0=z, args=(True,), jac=True)
+            sol = root(fun=self.target_function_pl, x0=z, args=(True,), jac=True, options={'xtol':1e-7})
         else:
-            sol = root(fun=self.target_function_bl, x0=z, args=(k, True), jac=True)        
+            sol = root(fun=self.target_function_bl, x0=z, args=(k, True), jac=True, options={'xtol':1e-7})        
 
         if sol.success:
             z = sol.x
@@ -473,6 +475,7 @@ class UPG(object):
 
         self.norm = np.linalg.norm(sol.fun)
         self.fun = sol.fun
+        self.solver_status = sol.status
         self.convergence = sol.success
         self.last_err_msg = sol.message
 
