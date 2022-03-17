@@ -27,7 +27,7 @@ Here's a comparison of the actual delta-v comsumption of these 2 algorithms. Not
 |AAPDG, kr=10|1866   |
 |AAPDG, kr=12|1913   |
 
-The kr=6 case is equivalent to E-guidance, and the kr=8 case is equivalent to original APDG used for Apollo landers. It is not guaranteed that the algorithm will not crash into terrain. Nor can AAPDG limit the thrust within the craft's capabilities, it can be saturated at times.
+The kr = 6 case is equivalent to E-guidance, and the kr = 12 case is equivalent to original APDG used for Apollo landers. It is not guaranteed that the algorithm will not crash into terrain. Nor can AAPDG limit the thrust within the craft's capabilities, it can be saturated at times.
 
 ## Dependencies
 
