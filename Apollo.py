@@ -23,8 +23,11 @@ class APDG(object):
         self.g_0 = -g_0 * up
         self.up = up
         self.k_r = k_r
-        
-        k = (a_f_k - 1.) / (k_r / 6. - 1.) + 1.
+        try:
+            k = (a_f_k - 1.) / (k_r / 6. - 1.) + 1.
+        except ZeroDivisionError:
+            k = 0
+
         self.a_f = -k * self.g_0
         # command values
         self.a_t = np.zeros((3, 1))

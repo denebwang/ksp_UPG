@@ -15,7 +15,19 @@ To begin with, specify the target latitude and longitude in the parameter sectio
 
 UPG descent module works bad from orbit, you may want to get in a descenting trajectory ( e.g. pe=15km, above target) when landing for moon, and for mars you can use upg after the airbreak phase (this is what upg is originally developed for).
 
-There is also a file to perform landing purely by the Augmented Apollo Powered Descent Guidance (AAPDG) [4]. This algorithm is used for UPG's terminal guidance, and itself can be used to perform  powered descent guidance. AAPDG doesn't suffer from the numerically difficult problem, which cause the UPG fail to converge when getting closer to the target.
+There is also a file to perform landing purely by the Augmented Apollo Powered Descent Guidance (AAPDG) [4], but use UPG to decide start time and total time for landing. This algorithm is used for UPG's terminal guidance, and itself can be used to perform  powered descent guidance. AAPDG doesn't suffer from the numerically difficult problem, which cause the UPG fail to converge when getting closer to the target.
+
+Here's a comparison of the actual delta-v comsumption of these 2 algorithms. Note that the delta-v of upg is always greater than what it says, as the terminal guidance will use more.
+
+|algorithm   |delta-v|
+|------------|-------|
+|UPG         |1790   |
+|AAPDG, kr=6 |1835   |
+|AAPDG, kr=8 |1847   |
+|AAPDG, kr=10|1866   |
+|AAPDG, kr=12|1913   |
+
+The kr=6 case is equivalent to E-guidance, and the kr=8 case is equivalent to original APDG used for Apollo landers. It is not guaranteed that the algorithm will not crash into terrain. Nor can AAPDG limit the thrust within the craft's capabilities, it can be saturated at times.
 
 ## Dependencies
 
