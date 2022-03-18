@@ -8,7 +8,7 @@ Universal Powered Guidance is a versatile powered guidance developed by Lu, et a
 
 By setting different constraints, the algorithms can be used for differnet purpose including landing, ascent, etc. Here only the powered descent is implemented.
 
-For the theory, refer to the paper list at the end. There is also a summary in `theory.ipynb`. Notebook is used as github cannot show formulae.
+For the theory, refer to the paper list at the end. ~~There is also a summary in `theory.ipynb`. Notebook is used as github cannot show formulae.~~ I can't get github preview working right, if you want to see the theories you can download the [theory.md](https://github.com/denebwang/ksp_UPG/blob/master/theory.md) file.
 
 ## Using UPG
 
