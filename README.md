@@ -1,6 +1,6 @@
 # ksp_UPG
 
-universal powered guidance in Kerbal Space Program based on krpc
+universal powered guidance in Kerbal Space Program based on krpc.
 
 ## About UPG
 
@@ -8,16 +8,36 @@ Universal Powered Guidance is a versatile powered guidance developed by Lu, et a
 
 By setting different constraints, the algorithms can be used for differnet purpose including landing, ascent, etc. Here only the powered descent is implemented.
 
+For the theory, refer to the paper list at the end. There is also a summary in `theory.ipynb`. Notebook is used as github cannot show formulae.
+
 ## Using UPG
 
 It is preferred to use the `Bolza-Landing.py` file to perform landing guidance.
 To begin with, specify the target latitude and longitude in the parameter section, and you may need to adjust some of the parameters to get it working properly.
 
-UPG descent module works bad from orbit, you may want to get in a descenting trajectory ( e.g. pe=15km, above target) when landing for moon, and for mars you can use upg after the airbreak phase (this is what upg is originally developed for).
+### Step 1: Preparation
 
-There is also a file to perform landing purely by the Augmented Apollo Powered Descent Guidance (AAPDG) [4], but use UPG to decide start time and total time for landing. This algorithm is used for UPG's terminal guidance, and itself can be used to perform  powered descent guidance. AAPDG doesn't suffer from the numerically difficult problem, which cause the UPG fail to converge when getting closer to the target.
+UPG descent module works bad from orbit, you may want to get in a descenting trajectory (e.g. pe=15km, above target) when landing for moon, and for mars you can use upg after the airbreak phase (this is what upg is originally developed for).
 
-Here's a comparison of the actual delta-v comsumption of these 2 algorithms. Note that the delta-v of upg is always greater than what it says, as the terminal guidance will use more.
+Besides, UPG does not support multi-stage landers. You can burn out the previous to get into a landing trajectory, and then use the UPG for fine tuning.
+
+Once you have entered the trajectory, you can initialize the UPG. Modify the parameters, especially the `lon` and `lat` ones. Other parameters may vary depending on craft and the body. The UPG will automatically estimate the optimal "coast" time. Here "coast" does not mean shutdown the engine, it will put throttle to minimum to avoid ignition.
+
+### Step 2: Wait for start
+
+UPG comes with powered descent initial(PDI) phase, that is, decide when to start the descent. This is done by running the softlanding method, and compare the downrange of softlanding and actual downrange. The descent will start when it slightly overshoots.
+
+### Step 3: Main guidance
+
+After the main algorithm kicks in, the craft will be guided towards the target. You may notice that the solver will fail to converge at times, and especially when close to target. This is normal, and should not be a problem as long as you can finally get there. The guidance will use the previously converged solution for open loop guidance.
+
+### Step 4: Terminal guidance
+
+As mentioned above, the solver will not converge well near the target. As a result, a terminal guidance of Augmented Apollo Powered Descent Guidance (AAPDG) [4] is added. There is also a file to perform landing purely by AAPDG, but use UPG to decide start time and total time for landing. AAPDG doesn't suffer from the numerically difficult problem, which cause the UPG fail to converge when getting closer to the target. AAPDG itself enconters singularity when time to-go approches 0, so a fixed speed descent is added at last.
+
+## What about efficiency?
+
+Here's a comparison of the actual delta-v comsumption of these 2 algorithms, when performing lunar landing from a 100km@15km oribit. Note that the delta-v of upg is always greater than what it says, as the terminal guidance will use more.
 
 |algorithm   |delta-v|
 |------------|-------|
@@ -27,7 +47,7 @@ Here's a comparison of the actual delta-v comsumption of these 2 algorithms. Not
 |AAPDG, kr=10|1866   |
 |AAPDG, kr=12|1913   |
 
-The kr = 6 case is equivalent to E-guidance, and the kr = 12 case is equivalent to original APDG used for Apollo landers. It is not guaranteed that the algorithm will not crash into terrain. Nor can AAPDG limit the thrust within the craft's capabilities, it can be saturated at times.
+The kr = 6 case is equivalent to E-guidance, and the kr = 12 case is equivalent to original APDG used for Apollo landers. It is not guaranteed that the both algorithm will not crash into terrain. Nor can AAPDG limit the thrust within the craft's capabilities, it can be saturated at times. Sometimes this can lead to crashed into terrain.
 
 ## Dependencies
 
