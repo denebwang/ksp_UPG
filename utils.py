@@ -7,6 +7,10 @@ def vector(x):
     return np.asarray(x).reshape(-1, 1)
 
 
+def normalize(x):
+    return x / np.linalg.norm(x)
+
+
 def target_reference_frame(space_center, body,  latitude: float, longitude: float):
     """Get the target frame at given latitude and longitude, with origin on the ground.
 
@@ -45,9 +49,12 @@ def move_position2height(height, position, body, frame):
         lat, lon, body.surface_height(lat, lon) + height, frame))
 
 
+def vector_angle(v1,v2):
+    v1 = v1.flatten()
+    v2 = v2.flatten()
+    return np.arccos(np.clip(np.dot(v1, v2) / np.linalg.norm(v1) / np.linalg.norm(v2), -1, 1))
+
 def downrange(from_, to, body, frame):
-    from_ = from_.flatten()
-    to = to.flatten()
-    theta = np.arccos(np.clip(np.dot(from_, to) / np.linalg.norm(from_) / np.linalg.norm(to), -1, 1))
+    theta = vector_angle(from_, to)
     r = body.altitude_at_position(tuple(to.flatten()), frame) + body.equatorial_radius
     return r * theta

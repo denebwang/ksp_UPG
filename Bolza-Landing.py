@@ -200,7 +200,7 @@ if k == 0. or np.arctan2((mean_altitude() - target_height), utils.downrange(r_ta
     line = conn.drawing.add_line((0., 0., 0.), (20., 0., 0.), target_frame)
     line.thickness = 3
 
-a_f = 1.5# final acceleration 2g(g with respect to body)
+a_f = 2. # final acceleration N g(g with respect to body)
 v_f = 3.   # touch down velocity.
 
 # calculate t_go
@@ -229,15 +229,12 @@ while True:
 
 
 while True:
-    
-    ap.target_direction = tuple(-i for i in velocity())
-    
-    vs = vertical_speed()
-    spd = speed()
-    sin_g = vs/spd
-    h = mean_altitude()
-    a_t = - (1. / sin_g) * (((final_velocity ** 2 - vs ** 2)/ (2 * (target_height - h))) + g_0)
-    thrust = utils.thrust2throttle(mass() * a_t, max_thrust(), min_throttle)
+    v_0 = utils.vector(velocity())
+    r_0 = utils.vector(position())
+    acc_dir, acc = Apollo.gravity_turn(vertical_speed(), speed(), mean_altitude(), final_velocity, target_height, g_0, r_0, v_0)
+    ap.target_direction = acc_dir
+    thrust =  utils.thrust2throttle(
+        mass() * acc, max_thrust(), min_throttle)
     vessel.control.throttle = thrust
     screen.print_error(current_thrust() - thrust, ap_err(), None)
     if situation() == space_center.VesselSituation.landed \

@@ -59,3 +59,17 @@ class APDG(object):
     def thrust(self):
         return np.linalg.norm(self.a_t) * self.m
 
+def gravity_turn(vert_spd, spd, height, target_spd, target_height, g_0, r_0, v_0):
+    if not hasattr(gravity_turn, 'straight'):
+        gravity_turn.straight = False
+
+    angle = utils.vector_angle(r_0, -v_0)
+    # ignore small variation
+    if angle > np.radians(2.) and gravity_turn.straight is False:
+        thrust_dir = tuple(utils.normalize(-v_0).flatten())
+        sin_g = vert_spd/spd
+    else:
+        thrust_dir = tuple(utils.normalize(r_0).flatten())
+        sin_g = -1.
+    a_t = - (1. / sin_g) * (((target_spd ** 2 - vert_spd ** 2)/ (2 * (target_height - height))) + g_0)
+    return thrust_dir, a_t
