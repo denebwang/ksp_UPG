@@ -412,7 +412,7 @@ class UPG(object):
         pvf_norm = np.linalg.norm(self.pv_final)
 
         # final position constraint
-        scaler = 1e-5
+        scaler = 1e-3
         s_1 = scaler * (r_final - self.r_target).flatten() # scale down for better convergence
 
         # final velocity constraint
@@ -452,10 +452,10 @@ class UPG(object):
     def target_function_t_2(self, t_2):
         # m_f is calculated during root finding
         self.t_2 = t_2
-        while True:
-            sol = root(self.target_function_bl, self.z, args=(0.,), jac=False, options={'xtol':1e-7})
-            if sol.success:
-                break
+        # while True:
+        sol = root(self.target_function_bl, self.z, args=(0.,True), jac=True, options={'xtol':1e-7})
+            # if sol.success:
+            #     break
         self.z = sol.x.reshape(-1, 1)
         return self.m - self.m_final
 

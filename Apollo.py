@@ -16,8 +16,9 @@ def t_togo(v_0, sin_gamma, a_t, g):
 
 class APDG(object):
 
-    def __init__(self, r_f, v_f, a_f_k, t_f, t_0, up ,m, r_0, v_0, g_0, k_r):
+    def __init__(self, r_f, v_f, a_f_k, t_f, t_0, m, r_0, v_0, g_0, k_r):
         self.r_f = r_f
+        up = utils.normalize(r_f)
         self.v_f = -v_f * up
         self.t_f = t_f
         self.g_0 = -g_0 * up

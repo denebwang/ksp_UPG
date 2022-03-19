@@ -54,7 +54,19 @@ def vector_angle(v1,v2):
     v2 = v2.flatten()
     return np.arccos(np.clip(np.dot(v1, v2) / np.linalg.norm(v1) / np.linalg.norm(v2), -1, 1))
 
-def downrange(from_, to, body, frame):
+# To avoid too many RPC calls?
+def downrange(from_, to, body=None, frame=None):
+    """Calculate downrange from one vector to another
+
+    Args:
+        from_ (ndarray): 3x1 vector of original position, usually current position.
+        to (ndarray): 3x1 vector of target position. Downrange is calculated with it's magnitude.
+        body (_type_, optional): Unused parameter for compatibility.
+        frame (_type_, optional): Unused parameter for compatibility
+
+    Returns:
+        float: The downrange
+    """
     theta = vector_angle(from_, to)
-    r = body.altitude_at_position(tuple(to.flatten()), frame) + body.equatorial_radius
+    r = np.linalg.norm(to)
     return r * theta

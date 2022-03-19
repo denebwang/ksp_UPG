@@ -35,7 +35,7 @@ def background():
     print("│" + "Last convergence: ".ljust(28) + "│" + "Last err: ".ljust(31) + "│")
     
     print("├" + "".ljust(28,'─') + "┴" + "".ljust(31,'─') + "┤")
-    print("│" + "Thrust err:".ljust(24) + "AP err: ".ljust(14) + "Land err:".ljust(22) + "│")
+    print("│" + "Thrust err:".ljust(23) + "AP err: ".ljust(15) + "Land err:".ljust(22) + "│")
     print("└" +"".ljust(60,'─') + '┘')
 
 
@@ -148,8 +148,8 @@ def print_error(t, ap, l):
         print("".rjust(10), end='')
     else:
         print("{:,.1f} kN".format(t / 1e3).rjust(10), end='')
-    move_cursor(33, 12)
-    print("{:.1f}°".format(ap).rjust(5), end='')
+    move_cursor(32, 12)
+    print("{:.1f}°".format(ap).rjust(7), end='')
     move_cursor(51, 12)
     if l is None:
         print("".rjust(11), end='')
