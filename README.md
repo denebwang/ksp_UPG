@@ -1,6 +1,6 @@
 # ksp_UPG
 
-universal powered guidance in Kerbal Space Program based on krpc.
+universal powered guidance in Kerbal Space Program based on krpc. The solver doesn't work very well, for more stable performance you can use the Apollo guidance.
 
 ## About UPG
 
