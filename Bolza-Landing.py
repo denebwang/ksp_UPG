@@ -14,7 +14,7 @@ logging.basicConfig(filename='upg.log',
                     filemode='w',
                     format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
                     datefmt='%H:%M:%S',
-                    level=logging.INFO)
+                    level=logging.DEBUG)
 
 open("failed_fun.csv", 'w+').close()
 
@@ -58,13 +58,15 @@ print("longitude: " + str(lon) + " latitude: " + str(lat))
 final_velocity = 3.
 # The target height above target that guidance ends.
 # A vertical fixed speed descent will be used for the final touch down.
+# UPG will be set to 300m + this value, then use terminal to correct it
 final_height = 50.
+upg_add_h = 300.
 # Minimum throttle. This must be exactly equal to your engine's min throttle.
 # Alternatively you can set to 0 for a coast phase
 min_throttle = 0.1
 # Coefficient for bolza landing. The larger the closer, but the solver will more likely to fail.
 # You don't need to be too accurate with guidance, terminal guidance will make you there.
-k = 500.
+k = 5e2
 # First burn time, in secondes. This should be fixed and have little effect on performance.
 t_1 = 10.
 # The time you want to burn at most.
@@ -74,19 +76,21 @@ burn_time = 600
 # Set index to 0 for bolza landing, 1 for pinpoint landing.
 mode = ['bolza', 'pinpoint'][0]
 print("Using mode: {0}".format(mode))
+# fall back to bolza mode when solver fails
+fall_back = True
 # The distance difference where the guidance start.
 # For instance, the guidance start to work when the target downrange is less than 
 # predicted downrange to target minus this value.
 PDI_margin = 1e3
 # if your throttle saturate, and thrust error is always negative, 
 # then your time is too short. Increase this value to lower thrust.
-time_coef = 1.25
+time_coef = 1.3
 
 # Terminal guidance related
 # When to swtich to guidance, by default this is set to 0.02 * body's radius
-terminal_downrange = 100 * 1e3
+terminal_downrange = 5 * 1e3
 # Time till end when the teriminal guidance kicks in. Defaults to 0.1 * total time
-terminal_time = 0.10
+terminal_time = 0.05
 # Set this to False, if you don't need to be very accurate to allow less fuel usage, as
 # the terminal guidance will use the final solution of upg as the target, not the specified one.
 precise_mode = True
@@ -98,7 +102,7 @@ st = 0.9
 ap.stopping_time = (st, st, st)
 # ap.deceleration_time = (3., 3., 3.)
 # This controls the precision. Smaller values will lead to unstablity.
-aa = 0.7
+aa = 0.8
 ap.attenuation_angle = (aa, aa, aa)
 ########### parameter ends ##############
 
@@ -106,16 +110,21 @@ ap.attenuation_angle = (aa, aa, aa)
 # target vector, with final height added.
 target_height = body.surface_height(lat, lon)
 r_target = utils.vector(body.position_at_altitude(
-    lat, lon, target_height + final_height, body_frame))
+    lat, lon, target_height + final_height + upg_add_h, body_frame))
 
 # get final velocity and up vector in body frame
 up = utils.normalize(r_target)
-v_target = -final_velocity * up
+v_target = -(final_velocity + 5) * up * 0.
 
 # draw the target
 target_frame = utils.target_reference_frame(space_center, body, lat, lon)
 line = conn.drawing.add_line((0., 0., 0.), (20., 0., 0.), target_frame)
 line.thickness = 2
+
+### for debug: draw upg target
+line = conn.drawing.add_line(tuple(utils.swap_yz(r_target).flatten()), 
+                             tuple(utils.swap_yz(r_target + 20 * up).flatten()), body_frame)
+line.thickness = 5
 
 # get initial values
 v_0 = utils.vector(velocity())
@@ -153,44 +162,55 @@ while True:
     if upg.status == Status.PDI:
         upg.update_start_time(ut())
         upg.solve(mode='soft')
-        dr_guidance = utils.downrange(r_0, upg.r_final, body, body_frame)
-        dr_target = utils.downrange(r_0, r_target, body, body_frame)
+        dr_guidance = utils.downrange(r_0, upg.r_final)
+        dr_target = utils.downrange(r_0, r_target)
         # The direction of soft landing may be different from the bolza/pinpoint one.
         # Solve the problem again before start to give the correct direction.
-        if dr_guidance > dr_target - 30. * PDI_margin:
-            upg.solve(mode=mode)
+        # if dr_guidance > dr_target - 30. * PDI_margin:
+        #     upg.solve(mode=mode)
         # start descent when overshoot the target with margin of 1km.
         if dr_guidance > dr_target + PDI_margin:
             upg.status = Status.Powered_descent
             m_initial = mass()
             # set terminal conditions
             terminal_time *= upg.t_f
-            logging.debug("Using terminal conditions: downrange={0:.4f}, time={1:.4f}".format(terminal_downrange, terminal_time))
+            logging.debug("Using terminal conditions: downrange=%f, time=%f", terminal_downrange, terminal_time)
             continue
 
     elif upg.status == Status.Powered_descent:
+        # move to before solve to avoid stucks in solver
+        vessel.control.throttle = upg.throttle
+        
         upg.solve(mode=mode)
+        with open("failed_fun.csv", 'a') as f:
+            np.savetxt(f, upg.fun.flatten(), newline=' ', delimiter=",")
+            f.write('\n')
         if not upg.convergence:
+            pass
             #logging.info("Failed to converge, the results are:\n" + str(upg.fun))
-            with open("failed_fun.csv", 'a') as f:
-                np.savetxt(f, upg.fun.flatten(), newline=' ', delimiter=",")
-                f.write('\n')
+            
 
         # correct target to the correct height as the distance to target could be large.
-        if k == 0.:
-            r_target = utils.move_position2height(
-                final_height, upg.r_final, body, body_frame)
-            up = utils.normalize(r_target)
-            v_target = -final_velocity * up
-            upg.set_target(r_target, v_target)
+        # if k == 0.:
+        #     r_target = utils.move_position2height(
+        #         final_height, upg.r_final, body, body_frame)
+        #     up = utils.normalize(r_target)
+        #     v_target = -final_velocity * up
+        #     upg.set_target(r_target, v_target)
+        #
+        # Update time again as the solver may take a while
+        upg.update_state(r_t=r_0, v_t=v_0, mass=mass(),
+                     max_thrust=max_thrust(), t_0=ut())
 
-        vessel.control.throttle = upg.throttle
-
-        dr_target = utils.downrange(r_0, r_target, body, body_frame)
-        dr_guidance = utils.downrange(r_0, upg.r_final, body, body_frame)
+        dr_target = utils.downrange(r_0, r_target)
+        dr_guidance = utils.downrange(r_0, upg.r_final)
         if dr_target < terminal_downrange or upg.t_f < terminal_time:
             upg.status = Status.Terminal
             break
+        if upg.last_convergence > 10 and mode =='pinpoint' and fall_back:
+            mode = 'bolza'
+        # logging.debug("landing error: dr %d, height %d", utils.downrange(upg.r_final, r_target), 
+        #               np.linalg.norm(upg.r_final)-np.linalg.norm(r_target))
 
     ap.target_direction = upg.thrust_direction
     screen.update_upg(upg.status, dr_target, dr_guidance, upg.t_f, upg.t_1_go, upg.t_2_go, upg.v_go,
@@ -200,25 +220,25 @@ while True:
 
 # Terminal guidance: use apollo guidance algorithm.
 
-# Don't need to change with good guidance
-# if k != 0. or mode == 'pinpoint':
-#     r_target = utils.vector(body.position_at_altitude(
-#         lat, lon, body.surface_height(lat, lon) + final_height, body_frame))
+if k != 0 or mode == 'pinpoint':
+    r_target = utils.vector(body.position_at_altitude(
+        lat, lon, target_height + final_height, body_frame))
 # Change to target to upg's prediction
-if k == 0. or np.arctan2((mean_altitude() - target_height), utils.downrange(upg.r_final, r_target)) <\
-        np.arcsin(-vertical_speed() / speed()) or (not precise_mode):
+landing_err = utils.downrange(upg.r_final, r_target)
+if k == 0 or np.arctan2((mean_altitude() - target_height), landing_err) -\
+        np.arcsin(-vertical_speed() / speed()) < np.radians(5)  or (not precise_mode) or landing_err > 2e3:
     # make another landing frame with the predicted final location
     r_target = utils.move_position2height(
         final_height, upg.r_final, body, body_frame)
     up = utils.normalize(r_target)
-    lat = body.latitude_at_position(tuple(r_target.flatten()), body_frame)
-    lon = body.longitude_at_position(tuple(r_target.flatten()), body_frame)
+    lat = body.latitude_at_position(tuple(utils.swap_yz(r_target.flatten())), body_frame)
+    lon = body.longitude_at_position(tuple(utils.swap_yz(r_target.flatten())), body_frame)
     target_height = body.surface_height(lat, lon)
     target_frame = utils.target_reference_frame(space_center, body, lat, lon)
     line = conn.drawing.add_line((0., 0., 0.), (20., 0., 0.), target_frame)
     line.thickness = 3
 
-a_f = 1.5  # final acceleration N g(g with respect to body)
+a_f = 2.  # final acceleration N g(g with respect to body)
 k_r = 8.0
 
 # calculate t_go

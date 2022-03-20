@@ -1,10 +1,18 @@
+import re
 import krpc
 import numpy as np
 import sys
 
 
+def swap_yz(x):
+    return np.array([[1,0,0],
+                     [0,0,1],
+                     [0,1,0]]) @ x
+
+
 def vector(x):
-    return np.asarray(x).reshape(-1, 1)
+    # Input must be krpc one, which is left handed
+    return swap_yz(np.asarray(x).reshape(-1, 1))
 
 
 def normalize(x):
@@ -42,7 +50,7 @@ def thrust2throttle(thrust, max_thrust, min_throttle):
 
 
 def move_position2height(height, position, body, frame):
-    position = tuple(position.flatten())
+    position = tuple(swap_yz(position).flatten())
     lat = body.latitude_at_position(position, frame)
     lon = body.longitude_at_position(position, frame)
     return vector(body.position_at_altitude(

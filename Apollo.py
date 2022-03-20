@@ -54,7 +54,8 @@ class APDG(object):
     @property
     def thrust_direction(self):
         unit_a_t = self.a_t / np.linalg.norm(self.a_t)
-        return tuple(unit_a_t.flatten())
+        a_t = utils.swap_yz(unit_a_t)
+        return tuple(a_t.flatten())
 
     @property
     def thrust(self):
@@ -73,4 +74,5 @@ def gravity_turn(vert_spd, spd, height, target_spd, target_height, g_0, r_0, v_0
         thrust_dir = tuple(utils.normalize(r_0).flatten())
         sin_g = -1.
     a_t = - (1. / sin_g) * (((target_spd ** 2 - vert_spd ** 2)/ (2 * (target_height - height))) + g_0)
+    thrust_dir = utils.swap_yz(thrust_dir)
     return thrust_dir, a_t

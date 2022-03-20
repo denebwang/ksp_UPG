@@ -2,7 +2,7 @@
 from enum import Enum
 import numpy as np
 from scipy.optimize import root, minimize_scalar
-
+from utils import swap_yz
 
 ge = 9.80665  # standard gravity which is used to calculate exhaust velocity
 
@@ -378,6 +378,7 @@ class UPG(object):
                 r_final.T @ dpv_dlam - self.pv_final.T @ dr_dlam +
                 self.T_max / self.m_final / self.g_0 /
                 pvf_norm * (self.pv_final.T @ dpv_dlam),
+                
                 v_final.T @ dpr_dtf + self.pr_final.T @ dv_dtf -
                 r_final.T @ dpv_dtf - self.pv_final.T @ dr_dtf +
                 self.T_max / self.m_final / self.g_0 / pvf_norm * (self.pv_final.T @ dpv_dtf) +
@@ -453,20 +454,20 @@ class UPG(object):
         # m_f is calculated during root finding
         self.t_2 = t_2
         # while True:
-        sol = root(self.target_function_bl, self.z, args=(0.,True), jac=True, options={'xtol':1e-7})
+        sol = root(self.target_function_bl, self.z, args=(0.,True), jac=True)
             # if sol.success:
             #     break
         self.z = sol.x.reshape(-1, 1)
         return self.m - self.m_final
 
-    def solve(self, mode: str):
+    def solve(self, mode: str, jac=True):
         sol = None
         z = self.new_z()
         k = self.k if mode == 'bolza' else 0.
         if mode == 'pinpoint':
-            sol = root(fun=self.target_function_pl, x0=z, args=(True,), jac=True, options={'xtol':1e-7})
+            sol = root(fun=self.target_function_pl, x0=z, args=(jac,), jac=jac)
         else:
-            sol = root(fun=self.target_function_bl, x0=z, args=(k, True), jac=True, options={'xtol':1e-7})        
+            sol = root(fun=self.target_function_bl, x0=z, args=(k, jac), jac=jac)        
 
         if sol.success:
             z = sol.x
@@ -555,6 +556,8 @@ class UPG(object):
         z = self.new_z()
         pr, pv, tf = np.vsplit(z, [3, 6])
         pv = pv / np.linalg.norm(pv)
+        # conver back to left handed
+        pv = swap_yz(pv)
         return tuple(pv.flatten())
 
     @property
