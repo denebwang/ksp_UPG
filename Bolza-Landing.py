@@ -74,10 +74,12 @@ t_1 = 10.
 # You will want to tune this value for better performance
 burn_time = 600
 # Set index to 0 for bolza landing, 1 for pinpoint landing.
-mode = ['bolza', 'pinpoint'][0]
+mode = ['bolza', 'pinpoint'][1]
 print("Using mode: {0}".format(mode))
 # fall back to bolza mode when solver fails
 fall_back = True
+# start terminal guidance when the solver still fails.
+early_terminal = True
 # The distance difference where the guidance start.
 # For instance, the guidance start to work when the target downrange is less than 
 # predicted downrange to target minus this value.
@@ -88,7 +90,7 @@ time_coef = 1.3
 
 # Terminal guidance related
 # When to swtich to guidance, by default this is set to 0.02 * body's radius
-terminal_downrange = 5 * 1e3
+terminal_downrange = 2 * 1e3
 # Time till end when the teriminal guidance kicks in. Defaults to 0.1 * total time
 terminal_time = 0.05
 # Set this to False, if you don't need to be very accurate to allow less fuel usage, as
@@ -207,8 +209,11 @@ while True:
         if dr_target < terminal_downrange or upg.t_f < terminal_time:
             upg.status = Status.Terminal
             break
-        if upg.last_convergence > 10 and mode =='pinpoint' and fall_back:
-            mode = 'bolza'
+        if upg.last_convergence > 10:
+            if mode =='pinpoint' and fall_back:
+                mode = 'bolza'
+            if mode == 'bolza' and early_terminal:
+                logging.debug('Can\'t converge, switch to terminal.')
         # logging.debug("landing error: dr %d, height %d", utils.downrange(upg.r_final, r_target), 
         #               np.linalg.norm(upg.r_final)-np.linalg.norm(r_target))
 
@@ -231,10 +236,10 @@ if k == 0 or np.arctan2((mean_altitude() - target_height), landing_err) -\
     r_target = utils.move_position2height(
         final_height, upg.r_final, body, body_frame)
     up = utils.normalize(r_target)
-    lat = body.latitude_at_position(tuple(utils.swap_yz(r_target.flatten())), body_frame)
-    lon = body.longitude_at_position(tuple(utils.swap_yz(r_target.flatten())), body_frame)
-    target_height = body.surface_height(lat, lon)
-    target_frame = utils.target_reference_frame(space_center, body, lat, lon)
+    new_lat = body.latitude_at_position(tuple(utils.swap_yz(r_target.flatten())), body_frame)
+    new_lon = body.longitude_at_position(tuple(utils.swap_yz(r_target.flatten())), body_frame)
+    target_height = body.surface_height(new_lat, new_lon)
+    target_frame = utils.target_reference_frame(space_center, body, new_lat, new_lon)
     line = conn.drawing.add_line((0., 0., 0.), (20., 0., 0.), target_frame)
     line.thickness = 3
 

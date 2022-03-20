@@ -353,9 +353,9 @@ class UPG(object):
                  [1., 0,  0]]
             )
         s_4 = ((a_1 @ r_final).T @ (self.pr_final +
-                                   2. * k * (r_final - self.r_target))).flatten()
+                                   k * (r_final - self.r_target))).flatten()
         s_5 = ((a_2 @ r_final).T @ (self.pr_final +
-                                   2. * k * (r_final - self.r_target))).flatten()
+                                   k * (r_final - self.r_target))).flatten()
         # normalize s4 and s5 to conpensate for k
         scaler = np.sqrt(1. + k ** 2)
         s_4 /= scaler
@@ -388,15 +388,15 @@ class UPG(object):
             temp1 = (self.pr_final + 2. * k * (r_final - self.r_target)).T
             j_4 = np.block([
                 temp1 @ a_1 @ dr_dlam +
-                r_final.T @ a_1.T @ (dpr_dlam + 2. * k * dr_dlam),
+                r_final.T @ a_1.T @ (dpr_dlam + k * dr_dlam),
                 temp1 @ a_1 @ dr_dtf +
-                r_final.T @ a_1.T @ (dpr_dtf + 2. * k * dr_dtf)
+                r_final.T @ a_1.T @ (dpr_dtf + k * dr_dtf)
             ])
             j_5 = np.block([
                 temp1 @ a_2 @ dr_dlam +
-                r_final.T @ a_2.T @ (dpr_dlam + 2. * k * dr_dlam),
+                r_final.T @ a_2.T @ (dpr_dlam + k * dr_dlam),
                 temp1 @ a_2 @ dr_dtf +
-                r_final.T @ a_2.T @ (dpr_dtf + 2. * k * dr_dtf)
+                r_final.T @ a_2.T @ (dpr_dtf + k * dr_dtf)
             ])
             j_4 /= scaler
             j_5 /= scaler
